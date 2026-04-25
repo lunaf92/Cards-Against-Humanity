@@ -157,6 +157,7 @@ The game follows standard Cards Against Humanity rules:
 |---|---|
 | id | UUID |
 | code | string (6 chars) |
+| password_hash | string (nullable, private rooms only) |
 | host_id | UUID (nullable for random rooms until assignment) |
 | room_kind | enum: `private` / `random` |
 | status | enum: `lobby` / `matchmaking_lobby` / `in_progress` / `finished` |

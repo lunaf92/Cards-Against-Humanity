@@ -69,7 +69,7 @@ class AuthService:
         revocation = TokenRevocation(
             user_id=user_id,
             token_jti=jti,
-            expires_at=datetime.fromtimestamp(exp, UTC),
+            expires_at=datetime.fromtimestamp(exp, UTC).replace(tzinfo=None),
         )
         db.add(revocation)
         await db.flush()
@@ -92,6 +92,8 @@ class AuthService:
     async def cleanup_expired_revocations(db: AsyncSession) -> None:
         """Clean up expired token revocation records."""
         await db.execute(
-            delete(TokenRevocation).where(TokenRevocation.expires_at < datetime.now(UTC))
+            delete(TokenRevocation).where(
+                TokenRevocation.expires_at < datetime.now(UTC).replace(tzinfo=None)
+            )
         )
         await db.flush()

@@ -1,14 +1,30 @@
 """Authentication endpoint tests."""
 import pytest
 from fastapi import status
+from app.routers import health as health_router
 
 
-def test_health_check(client):
+def test_health_check(client, monkeypatch):
     """Test health check endpoint."""
+    class _FakeRedisClient:
+        async def ping(self):
+            return True
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        health_router.redis,
+        "from_url",
+        lambda *_args, **_kwargs: _FakeRedisClient(),
+    )
+
     response = client.get("/health")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["status"] == "healthy"
+    assert data["database"] == "connected"
+    assert data["redis"] == "connected"
 
 
 def test_register_user(client):
@@ -16,6 +32,20 @@ def test_register_user(client):
     payload = {
         "username": "testuser",
         "email": "test@example.com",
+        "password": "securepass123"
+    }
+    response = client.post("/auth/register", json=payload)
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+    assert data["token_type"] == "bearer"
+
+
+def test_register_user_without_email(client):
+    """Test registration with username/password only (email optional)."""
+    payload = {
+        "username": "testuser_no_email",
         "password": "securepass123"
     }
     response = client.post("/auth/register", json=payload)
@@ -54,6 +84,27 @@ def test_login_user(client):
     # Login
     login_payload = {
         "username_or_email": "testuser",
+        "password": "securepass123"
+    }
+    response = client.post("/auth/login", json=login_payload)
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+
+
+def test_login_user_with_email_identifier(client):
+    """Test login using email via username_or_email field."""
+    register_payload = {
+        "username": "email_login_user",
+        "email": "email_login_user@example.com",
+        "password": "securepass123"
+    }
+    register_response = client.post("/auth/register", json=register_payload)
+    assert register_response.status_code == status.HTTP_201_CREATED
+
+    login_payload = {
+        "username_or_email": "email_login_user@example.com",
         "password": "securepass123"
     }
     response = client.post("/auth/login", json=login_payload)

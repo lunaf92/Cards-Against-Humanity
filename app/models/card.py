@@ -18,7 +18,11 @@ class Card(Base):
     pick = Column(Integer, default=1)
     owner_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
 
     # Relationships
     owner = relationship("User", back_populates="cards")

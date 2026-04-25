@@ -14,5 +14,9 @@ class TokenRevocation(Base):
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     token_jti = Column(String(255), unique=True, nullable=False, index=True)
-    revoked_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    revoked_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
     expires_at = Column(DateTime, nullable=False)

@@ -19,8 +19,13 @@ from app.models import (  # noqa: F401
 # Alembic Config object
 config = context.config
 
-# Set database URL from environment
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Set database URL from environment.
+# Alembic runs with a synchronous engine, so convert asyncpg URLs.
+database_url = settings.DATABASE_URL
+if database_url.startswith("postgresql+asyncpg://"):
+    database_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+
+config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for logging
 if config.config_file_name is not None:

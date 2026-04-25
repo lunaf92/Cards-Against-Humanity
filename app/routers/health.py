@@ -1,5 +1,6 @@
 """Health check endpoint."""
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db, engine
 import redis.asyncio as redis
@@ -20,7 +21,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     """Check database, Redis, and API connectivity."""
     try:
         # Test database connection
-        await db.execute("SELECT 1")
+        await db.execute(text("SELECT 1"))
 
         # Test Redis connection
         redis_client = redis.from_url(settings.REDIS_URL)

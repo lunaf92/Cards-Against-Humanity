@@ -17,7 +17,11 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=False)
     auth_provider = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
 
     # Relationships
     cards = relationship("Card", back_populates="owner")

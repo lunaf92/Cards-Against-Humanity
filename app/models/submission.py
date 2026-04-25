@@ -16,4 +16,8 @@ class Submission(Base):
     player_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     white_card_ids = Column(ARRAY(PG_UUID(as_uuid=True)), nullable=False)
     is_winner = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )

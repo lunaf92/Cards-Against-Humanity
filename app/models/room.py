@@ -14,6 +14,8 @@ class Room(Base):
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code = Column(String(6), unique=True, nullable=False, index=True)
+    # Private rooms store a bcrypt hash of the room password.
+    password_hash = Column(String(255), nullable=True)
     host_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     room_kind = Column(Enum("private", "random", name="room_kind"), nullable=False)
     status = Column(
@@ -37,7 +39,11 @@ class Room(Base):
         nullable=False,
     )
     matchmaking_fill_expires_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+    )
 
     # Relationships
     host = relationship("User", back_populates="rooms")

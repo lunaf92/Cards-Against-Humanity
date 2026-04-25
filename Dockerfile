@@ -10,12 +10,12 @@ RUN apt-get update && apt-get install -y \
 # Install Poetry
 RUN pip install --no-cache-dir poetry
 
-# Copy pyproject.toml and poetry.lock
-COPY pyproject.toml poetry.lock* ./
+# Copy package metadata required by Poetry install
+COPY pyproject.toml poetry.lock* README.md ./
 
 # Install dependencies
 RUN poetry config virtualenvs.create false && \
-    poetry install --no-interaction --no-ansi
+    poetry install --no-interaction --no-ansi --no-root
 
 # Copy app
 COPY app ./app
