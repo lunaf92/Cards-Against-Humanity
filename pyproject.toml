@@ -1,0 +1,46 @@
+[tool.poetry]
+name = "cards-against-humanity-clone"
+version = "0.1.0"
+description = "Cross-platform multiplayer Cards Against Humanity clone"
+authors = ["Federico <dev@example.com>"]
+readme = "README.md"
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+fastapi = "^0.104.1"
+uvicorn = {extras = ["standard"], version = "^0.24.0"}
+sqlalchemy = "^2.0.23"
+alembic = "^1.13.1"
+psycopg2-binary = "^2.9.9"
+redis = "^5.0.1"
+pydantic-settings = "^2.1.0"
+pydantic = "^2.5.0"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+python-multipart = "^0.0.6"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+pytest-asyncio = "^0.21.1"
+pytest-cov = "^4.1.0"
+ruff = "^0.1.8"
+black = "^23.12.0"
+httpx = "^0.25.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing"
