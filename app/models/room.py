@@ -2,7 +2,7 @@
 from sqlalchemy import Column, String, DateTime, Integer, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from datetime import datetime
+from datetime import datetime, UTC
 import uuid
 
 from app.models.base import Base
@@ -37,7 +37,7 @@ class Room(Base):
         nullable=False,
     )
     matchmaking_fill_expires_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Relationships
     host = relationship("User", back_populates="rooms")

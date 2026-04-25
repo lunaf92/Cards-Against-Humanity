@@ -51,6 +51,17 @@ If a needed Docker command is missing, add it to project docs/scripts before con
   - examples when behavior is not obvious
 - Keep `requirements.md` and `plan.md` aligned with delivered behavior.
 
+## Phase-Close Documentation Protocol
+
+- At the end of every completed phase, update `AGENT.md` with any new execution standards, constraints, and quality gates introduced during that phase.
+- At the end of every completed phase, create or update phase documentation under `docs/` with:
+  - what was implemented
+  - architecture and flow explanation for non-boilerplate code
+  - file and line references for key logic paths
+  - behavior notes, edge cases, and known limitations
+- For non-boilerplate code, include implementation-focused explanations similar in depth to the auth/revocation documentation style already used in `docs/`.
+- Keep phase docs actionable: include verification steps and expected outcomes.
+
 ## Code Comment Policy
 
 - Add a one-line comment above any non-trivial function or complex logic block.
@@ -66,6 +77,7 @@ A task is complete only when all are true:
 3. Regression risk is covered by tests.
 4. Swagger/OpenAPI docs are accurate.
 5. Project docs are updated for non-trivial changes.
+6. Phase-close docs in `docs/` are updated when a phase is completed.
 
 ## PR Checklist
 
@@ -76,3 +88,4 @@ A task is complete only when all are true:
 - [ ] Swagger/OpenAPI updated
 - [ ] Non-trivial functions include one-line intent comments
 - [ ] `requirements.md`/`plan.md` updated if scope changed
+- [ ] `docs/` phase documentation updated for non-boilerplate implementations

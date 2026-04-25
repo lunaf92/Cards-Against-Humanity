@@ -1,7 +1,7 @@
 """Submission model for tracking card submissions."""
 from sqlalchemy import Column, Boolean, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, ARRAY
-from datetime import datetime
+from datetime import datetime, UTC
 import uuid
 
 from app.models.base import Base
@@ -16,4 +16,4 @@ class Submission(Base):
     player_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     white_card_ids = Column(ARRAY(PG_UUID(as_uuid=True)), nullable=False)
     is_winner = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)

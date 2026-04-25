@@ -2,7 +2,7 @@
 from sqlalchemy import Column, String, DateTime, Boolean, Integer, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from datetime import datetime
+from datetime import datetime, UTC
 import uuid
 
 from app.models.base import Base
@@ -18,7 +18,7 @@ class Card(Base):
     pick = Column(Integer, default=1)
     owner_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
 
     # Relationships
     owner = relationship("User", back_populates="cards")

@@ -1,6 +1,6 @@
 """Authentication service with server-side token revocation."""
 from uuid import uuid4, UUID
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.models import User, TokenRevocation
@@ -69,7 +69,7 @@ class AuthService:
         revocation = TokenRevocation(
             user_id=user_id,
             token_jti=jti,
-            expires_at=datetime.utcfromtimestamp(exp),
+            expires_at=datetime.fromtimestamp(exp, UTC),
         )
         db.add(revocation)
         await db.flush()
@@ -92,6 +92,6 @@ class AuthService:
     async def cleanup_expired_revocations(db: AsyncSession) -> None:
         """Clean up expired token revocation records."""
         await db.execute(
-            delete(TokenRevocation).where(TokenRevocation.expires_at < datetime.utcnow())
+            delete(TokenRevocation).where(TokenRevocation.expires_at < datetime.now(UTC))
         )
         await db.flush()

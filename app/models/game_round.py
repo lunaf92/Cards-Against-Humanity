@@ -1,7 +1,7 @@
 """GameRound model for tracking game rounds."""
 from sqlalchemy import Column, Integer, Enum, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from datetime import datetime
+from datetime import datetime, UTC
 import uuid
 
 from app.models.base import Base
@@ -20,4 +20,4 @@ class GameRound(Base):
         Enum("waiting", "judging", "complete", name="round_status"),
         nullable=False,
     )
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
