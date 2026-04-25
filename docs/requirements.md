@@ -196,3 +196,26 @@ The game follows standard Cards Against Humanity rules:
 | player_id | UUID |
 | white_card_ids | UUID[] |
 | is_winner | bool |
+
+---
+
+## 10. Future Iterations (Post-MVP)
+
+### 10.1 Multilingual Support
+
+**Scope:** Italian and Spanish localization to start, with foundation for additional languages.
+
+**Database Schema Consideration:**
+- Add `language: str` field to `Card` model (default: `"en"`)
+  - Black Cards and White Cards both support multilingual variants
+  - Existing MVP will use `"en"` by default with no impact on performance
+
+**Implementation Plan (Post-MVP):**
+- Seed Italian (`it`) and Spanish (`es`) card decks into the default deck
+- Add `language` parameter to room creation endpoint
+- Filter card queries by room's configured language
+- Add `Accept-Language` header support to auto-detect user preference
+- Update frontend to display language selector in room lobby
+
+**Why now:** Adding the schema column now eliminates future data migration complexity and allows zero-impact MVP rollout. Future language additions become trivial.
+

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from fastapi.testclient import TestClient
 from app.main import app
 from app.core.database import get_db
-from app.models import User, TokenRevocation
+from app.models import Card, GameRound, Room, RoomPlayer, TokenRevocation, User
 
 
 @pytest_asyncio.fixture
@@ -13,9 +13,19 @@ async def test_db():
     """Create in-memory SQLite DB with only auth-required tables."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 
-    # Create only the tables needed by auth/health tests.
+    # Create only the tables needed by API tests (exclude Submission due SQLite ARRAY support).
     async with engine.begin() as conn:
-        await conn.run_sync(User.metadata.create_all, tables=[User.__table__, TokenRevocation.__table__])
+        await conn.run_sync(
+            User.metadata.create_all,
+            tables=[
+                User.__table__,
+                TokenRevocation.__table__,
+                Card.__table__,
+                Room.__table__,
+                RoomPlayer.__table__,
+                GameRound.__table__,
+            ],
+        )
 
     async_session = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False

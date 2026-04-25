@@ -18,6 +18,7 @@ class Card(Base):
     pick = Column(Integer, default=1)
     owner_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
+    language = Column(String(10), default="en", nullable=False)  # Future: multilingual support (en, es, it, etc.)
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(UTC).replace(tzinfo=None),

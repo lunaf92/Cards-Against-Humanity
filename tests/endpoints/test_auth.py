@@ -63,17 +63,14 @@ def test_register_duplicate_username(client):
         "email": "test@example.com",
         "password": "securepass123"
     }
-    # First registration
     client.post("/auth/register", json=payload)
 
-    # Duplicate registration
     response = client.post("/auth/register", json=payload)
     assert response.status_code == status.HTTP_409_CONFLICT
 
 
 def test_login_user(client):
     """Test user login."""
-    # Register first
     register_payload = {
         "username": "testuser",
         "email": "test@example.com",
@@ -81,7 +78,6 @@ def test_login_user(client):
     }
     client.post("/auth/register", json=register_payload)
 
-    # Login
     login_payload = {
         "username_or_email": "testuser",
         "password": "securepass123"
@@ -126,7 +122,6 @@ def test_login_invalid_credentials(client):
 
 def test_refresh_token(client):
     """Test token refresh."""
-    # Register and get tokens
     register_payload = {
         "username": "testuser",
         "email": "test@example.com",
@@ -135,7 +130,6 @@ def test_refresh_token(client):
     register_response = client.post("/auth/register", json=register_payload)
     refresh_token = register_response.json()["refresh_token"]
 
-    # Refresh
     refresh_payload = {"refresh_token": refresh_token}
     response = client.post("/auth/refresh", json=refresh_payload)
     assert response.status_code == status.HTTP_200_OK

@@ -1,7 +1,13 @@
 """Alembic environment configuration."""
+import os
+import sys
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
+
+# Add app directory to path so imports work from Docker
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from app.core.config import settings
 from app.models import Base
 

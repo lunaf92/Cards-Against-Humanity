@@ -2,9 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routers import auth, health
-from app.models import Base
-from app.core.database import engine
+from app.routers import auth, cards, health, users
 
 # Create FastAPI app with OpenAPI documentation
 app = FastAPI(
@@ -28,13 +26,11 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router)
 app.include_router(health.router)
+app.include_router(cards.router)
+app.include_router(users.router)
 
-
-@app.on_event("startup")
-async def startup():
-    """Create database tables on startup."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+# Note: Database schema is managed by Alembic migrations.
+# Always run 'alembic upgrade head' before starting the app to ensure schema is current.
 
 
 @app.get("/", tags=["root"], summary="API root")
