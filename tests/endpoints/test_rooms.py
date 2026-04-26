@@ -194,6 +194,13 @@ def test_matchmaking_queue_promotes_first_three_players(client, monkeypatch):
     fake_redis = _FakeRedisClient()
     monkeypatch.setattr(rooms_router.redis, "from_url", lambda *_args, **_kwargs: fake_redis)
 
+    broadcasted_events: list[tuple[UUID, dict]] = []
+
+    async def _capture_broadcast(room_id: UUID, payload: dict) -> None:
+        broadcasted_events.append((room_id, payload))
+
+    monkeypatch.setattr(rooms_router.connection_manager, "broadcast_event", _capture_broadcast)
+
     t1 = _register_and_get_access_token(client, "queue_user_1")
     t2 = _register_and_get_access_token(client, "queue_user_2")
     t3 = _register_and_get_access_token(client, "queue_user_3")
@@ -226,6 +233,11 @@ def test_matchmaking_queue_promotes_first_three_players(client, monkeypatch):
     r4 = client.post("/rooms/queue", headers=_auth_headers(t4))
     assert r4.status_code == status.HTTP_200_OK
     assert r4.json()["matched_room_id"] == room_id
+
+    reset_events = [payload for evt_room_id, payload in broadcasted_events if str(evt_room_id) == room_id and payload.get("event") == "matchmaking.countdown_reset"]
+    assert len(reset_events) == 1
+    assert reset_events[0]["payload"]["player_count"] == 4
+    assert reset_events[0]["payload"]["seconds_remaining"] >= 0
 
     room_details_after = client.get(f"/rooms/{room_id}", headers=_auth_headers(t1))
     assert room_details_after.status_code == status.HTTP_200_OK

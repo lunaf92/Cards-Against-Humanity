@@ -49,36 +49,36 @@ Goal: real-time multiplayer works end-to-end. This is the most complex phase. De
 
 ### WebSocket infrastructure
 
-1. WS /ws/rooms/{room_id} — authenticated via JWT query param on connect
-2. Connection manager — in-memory dict of room_id → set[WebSocket]; wraps broadcast and send_personal
-3. Redis pub/sub bridge — each backend instance subscribes to a Redis channel per room; broadcasts from any instance reach all connected players (enables horizontal scaling)
+1. ✅ WS /ws/rooms/{room_id} — authenticated via JWT query param on connect
+2. ✅ Connection manager — in-memory dict of room_id → set[WebSocket]; wraps broadcast and send_personal
+3. ✅ Redis pub/sub bridge — each backend instance subscribes to a Redis channel per room; broadcasts from any instance reach all connected players (enables horizontal scaling)
 ### Lobby events (can be developed parallel with game engine)
-4. On connect → broadcast player_joined event to room
-5. On disconnect → broadcast player_left; if host, transfer host to next in join order and broadcast host_changed
+4. ✅ On connect → broadcast player_joined event to room
+5. ✅ On disconnect → broadcast player_left; if host, transfer host to next in join order and broadcast host_changed
 
 ### Random matchmaking orchestrator
-6. When queue reaches 3 players, create random room with status matchmaking_lobby and start fill window (10 seconds)
-7. If another player joins before expiry and room size is below 10, add player and reset fill window to 10 seconds
-8. If room reaches 10 players, lock lobby and start immediately
-9. If fill timer expires with 3–9 players, lock lobby and start
-10. If room drops below 3 during fill window, cancel timer and wait until room returns to at least 3
-11. Emit WS events: match_found, matchmaking_countdown_started, matchmaking_countdown_reset, matchmaking_countdown_canceled, matchmaking_locked
+6. ✅ When queue reaches 3 players, create random room with status matchmaking_lobby and start fill window (10 seconds)
+7. ✅ If another player joins before expiry and room size is below 10, add player and reset fill window to 10 seconds
+8. ✅ If room reaches 10 players, lock lobby and start immediately
+9. ✅ If fill timer expires with 3–9 players, lock lobby and start
+10. ✅ If room drops below 3 during fill window, cancel timer and wait until room returns to at least 3
+11. ✅ Emit WS events: match_found, matchmaking_countdown_started, matchmaking_countdown_reset, matchmaking_countdown_canceled, matchmaking_locked
 
 ### Game state machine — implemented as a GameService class backed by Redis hashes for active game state
-12. START_GAME command (host only) → validate ≥3 players → assemble card pool per card_pool_mode → shuffle → deal 10 white cards to each player → persist hands in Redis → broadcast game_started + each player's private hand
-13. ROUND_START → select Czar (rotate) → draw black card → broadcast round_started {czar_id, black_card}
-14. SUBMIT_CARDS command → validate player is not Czar, card count matches pick, cards are in hand → store submission in Redis → if all submitted, advance automatically; else start/continue timer
-15. ROUND_JUDGE → broadcast all submissions shuffled + anonymized to all players
-16. PICK_WINNER command (Czar only) → record winner in Submission row → award point → broadcast round_result {winner, cards, scores}
-17. Check win condition → if met, broadcast game_over {scoreboard}, persist final state to DB, close room; else loop to step 13
+12. ✅ START_GAME command (host only) → validate ≥3 players → assemble card pool per card_pool_mode → shuffle → deal 10 white cards to each player → persist hands in Redis → broadcast game_started + each player's private hand
+13. ✅ ROUND_START → select Czar (rotate) → draw black card → broadcast round_started {czar_id, black_card}
+14. ✅ SUBMIT_CARDS command → validate player is not Czar, card count matches pick, cards are in hand → store submission in Redis → if all submitted, advance automatically; else start/continue timer
+15. ✅ ROUND_JUDGE → broadcast all submissions shuffled + anonymized to all players
+16. ✅ PICK_WINNER command (Czar only) → record winner in Submission row → award point → broadcast round_result {winner, cards, scores}
+17. ✅ Check win condition → if met, broadcast game_over {scoreboard}, persist final state to DB, close room; else loop to step 13
 
 ### Round timer
-18. On ROUND_START spawn an asyncio.create_task for the configured duration; on expiry, auto-submit random unplayed white card for any non-submitting player; cancel task on early completion
+18. ✅ On ROUND_START spawn an asyncio.create_task for the configured duration; on expiry, auto-submit random unplayed white card for any non-submitting player; cancel task on early completion
 
 ### Disconnect/reconnect
-19. On disconnect during game → store disconnected_at timestamp in Redis; keep player in room for 60s
-20. On reconnect within window → restore hand from Redis, send current game state via game_state_sync event
-21. On timeout → remove player, discard hand; if Czar, skip round (step 13 with next Czar)
+19. ✅ On disconnect during game → store disconnected_at timestamp in Redis; keep player in room for 60s
+20. ✅ On reconnect within window → restore hand from Redis, send current game state via game_state_sync event
+21. ✅ On timeout → remove player, discard hand; if Czar, skip round (step 13 with next Czar)
 
 _Verify_: manual multiplayer test against compose-hosted backend with 3 browser/wscat clients; simulate disconnection and timer expiry.
 

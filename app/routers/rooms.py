@@ -19,6 +19,8 @@ from app.schemas.room import (
     RoomResponse,
 )
 from app.services.rooms import RoomService
+from app.schemas.ws import WSEvent
+from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
@@ -64,12 +66,32 @@ async def join_matchmaking_queue(
     """Enter random matchmaking queue and promote first 3 players into lobby."""
     redis_client = redis.from_url(settings.REDIS_URL)
     try:
-        queue_size, matched_room_id, _is_new_room = await RoomService.enqueue_for_matchmaking(
+        queue_size, matched_room_id, is_new_room = await RoomService.enqueue_for_matchmaking(
             db=db,
             redis_client=redis_client,
             user=current_user,
         )
         await db.commit()
+
+        if matched_room_id is not None and not is_new_room:
+            matchmaking_state = await RoomService.get_matchmaking_state(db, matched_room_id)
+            if matchmaking_state and matchmaking_state["fill_expires_at"] is not None:
+                await connection_manager.broadcast_event(
+                    matched_room_id,
+                    WSEvent(
+                        event="matchmaking.countdown_reset",
+                        room_id=matched_room_id,
+                        payload={
+                            "expires_at": matchmaking_state["fill_expires_at"],
+                            "seconds_remaining": max(
+                                0,
+                                matchmaking_state["seconds_remaining"] or 0,
+                            ),
+                            "player_count": matchmaking_state["player_count"],
+                        },
+                    ).model_dump(mode="json"),
+                )
+
         return QueueResponse(
             queued=True,
             queue_size=queue_size,

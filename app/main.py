@@ -1,8 +1,21 @@
 """Main FastAPI application."""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routers import auth, cards, health, rooms, users, ws_rooms
+from app.services.ws_connection_manager import connection_manager
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start and stop shared websocket pub/sub bridge with app lifecycle."""
+    await connection_manager.start_pubsub_bridge(settings.REDIS_URL)
+    try:
+        yield
+    finally:
+        await connection_manager.stop_pubsub_bridge()
 
 # Create FastAPI app with OpenAPI documentation
 app = FastAPI(
@@ -12,6 +25,7 @@ app = FastAPI(
     openapi_url="/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware

@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 from uuid import UUID
+from uuid import uuid4
 
 from fastapi import WebSocket
+import redis.asyncio as redis
+
+
+logger = logging.getLogger(__name__)
+ROOM_CHANNEL_PREFIX = "ws:room:"
 
 
 class RoomConnectionManager:
@@ -12,6 +21,90 @@ class RoomConnectionManager:
 
     def __init__(self) -> None:
         self._rooms: dict[UUID, dict[UUID, list[WebSocket]]] = {}
+        self._instance_id = str(uuid4())
+        self._redis_client: redis.Redis | None = None
+        self._bridge_task: asyncio.Task | None = None
+
+    async def start_pubsub_bridge(self, redis_url: str) -> None:
+        """Start Redis pub/sub bridge for cross-instance room broadcasts."""
+        if self._bridge_task is not None and not self._bridge_task.done():
+            return
+
+        self._redis_client = redis.from_url(redis_url)
+        self._bridge_task = asyncio.create_task(self._run_pubsub_bridge())
+
+    async def stop_pubsub_bridge(self) -> None:
+        """Stop Redis pub/sub bridge and close shared Redis client."""
+        if self._bridge_task is not None:
+            self._bridge_task.cancel()
+            try:
+                await self._bridge_task
+            except asyncio.CancelledError:
+                pass
+            self._bridge_task = None
+
+        if self._redis_client is not None:
+            await self._redis_client.aclose()
+            self._redis_client = None
+
+    async def _run_pubsub_bridge(self) -> None:
+        """Subscribe to room channels and fan-out remote events locally."""
+        if self._redis_client is None:
+            return
+
+        pubsub = self._redis_client.pubsub()
+        await pubsub.psubscribe(f"{ROOM_CHANNEL_PREFIX}*")
+
+        try:
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message is None:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                raw_data = message.get("data")
+                if isinstance(raw_data, bytes):
+                    raw_data = raw_data.decode()
+                if not isinstance(raw_data, str):
+                    continue
+
+                envelope = json.loads(raw_data)
+                if envelope.get("source") == self._instance_id:
+                    continue
+
+                room_id_raw = envelope.get("room_id")
+                payload = envelope.get("payload")
+                if room_id_raw is None or not isinstance(payload, dict):
+                    continue
+
+                room_id = UUID(str(room_id_raw))
+                await self._broadcast_local(room_id, payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive bridge guard
+            logger.exception("websocket pubsub bridge failed: %s", exc)
+        finally:
+            await pubsub.aclose()
+
+    async def _broadcast_local(self, room_id: UUID, payload: dict) -> None:
+        """Broadcast payload only to sockets connected in this process."""
+        room_connections = self._rooms.get(room_id, {})
+        for user_connections in room_connections.values():
+            for websocket in user_connections:
+                await websocket.send_json(payload)
+
+    async def _publish_room_event(self, room_id: UUID, payload: dict) -> None:
+        """Publish payload for other app instances via Redis pub/sub."""
+        if self._redis_client is None:
+            return
+
+        channel = f"{ROOM_CHANNEL_PREFIX}{room_id}"
+        envelope = {
+            "source": self._instance_id,
+            "room_id": str(room_id),
+            "payload": payload,
+        }
+        await self._redis_client.publish(channel, json.dumps(envelope, default=str))
 
     async def connect(self, room_id: UUID, user_id: UUID, websocket: WebSocket) -> None:
         """Accept socket and register user connection for room."""
@@ -59,16 +152,8 @@ class RoomConnectionManager:
 
     async def broadcast_event(self, room_id: UUID, payload: dict) -> None:
         """Broadcast event payload to all connected users in room."""
-        import logging
-        logger = logging.getLogger(__name__)
-        event_name = payload.get("event", "unknown")
-        logger.warning(f"[BROADCAST] Broadcasting event '{event_name}' to room {room_id}")
-        room_connections = self._rooms.get(room_id, {})
-        connection_count = sum(len(conns) for conns in room_connections.values())
-        logger.warning(f"[BROADCAST] Sending to {connection_count} connected websockets in room {room_id}")
-        for user_connections in room_connections.values():
-            for websocket in user_connections:
-                await websocket.send_json(payload)
+        await self._broadcast_local(room_id, payload)
+        await self._publish_room_event(room_id, payload)
 
 
 connection_manager = RoomConnectionManager()
