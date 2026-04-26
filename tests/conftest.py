@@ -1,19 +1,20 @@
 """Test configuration and fixtures."""
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from app.main import app
 from app.core.database import get_db
-from app.models import Card, GameRound, Room, RoomPlayer, TokenRevocation, User
+from app.models import Card, GameRound, Room, RoomPlayer, Submission, TokenRevocation, User
 
 
 @pytest_asyncio.fixture
 async def test_db():
-    """Create in-memory SQLite DB with only auth-required tables."""
+    """Create in-memory SQLite DB for endpoint and service tests."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 
-    # Create only the tables needed by API tests (exclude Submission due SQLite ARRAY support).
+    # Keep the test schema aligned with the gameplay flow exercised by websocket tests.
     async with engine.begin() as conn:
         await conn.run_sync(
             User.metadata.create_all,
@@ -24,6 +25,7 @@ async def test_db():
                 Room.__table__,
                 RoomPlayer.__table__,
                 GameRound.__table__,
+                Submission.__table__,
             ],
         )
 
