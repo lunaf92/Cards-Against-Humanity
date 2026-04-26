@@ -857,8 +857,8 @@ class RoomService:
         return room
 
     @staticmethod
-    async def enqueue_for_matchmaking(db: AsyncSession, redis_client, user: User) -> tuple[int, UUID | None]:
-        """Enqueue user and promote first 3 queued users into a random room when ready."""
+    async def enqueue_for_matchmaking(db: AsyncSession, redis_client, user: User) -> tuple[int, UUID | None, bool]:
+        """Enqueue user and promote first 3 queued users into a random room when ready. Return (queue_size, room_id_or_none, is_new_room)."""
         # Intent: Keep queue ordering deterministic and server-authoritative.
         now = datetime.now(UTC).timestamp()
         await redis_client.zadd(MATCHMAKING_QUEUE_KEY, {str(user.id): now})
@@ -871,7 +871,7 @@ class RoomService:
                 datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=10)
             )
             await db.flush()
-            return int(await redis_client.zcard(MATCHMAKING_QUEUE_KEY)), existing_room.id
+            return int(await redis_client.zcard(MATCHMAKING_QUEUE_KEY)), existing_room.id, False
 
         queue_size = int(await redis_client.zcard(MATCHMAKING_QUEUE_KEY))
 
@@ -901,7 +901,7 @@ class RoomService:
             await RoomService._add_player_to_room(db, room, player_id)
 
         await db.flush()
-        return int(await redis_client.zcard(MATCHMAKING_QUEUE_KEY)), room.id
+        return int(await redis_client.zcard(MATCHMAKING_QUEUE_KEY)), room.id, True
 
     @staticmethod
     async def leave_matchmaking_queue(redis_client, user_id: UUID) -> bool:
@@ -960,10 +960,35 @@ class RoomService:
         await db.flush()
 
     @staticmethod
-    async def process_matchmaking_tick(db: AsyncSession) -> int:
-        """Update matchmaking countdown state for all random lobbies."""
+    async def get_matchmaking_state(db: AsyncSession, room_id: UUID) -> dict | None:
+        """Return matchmaking state including expiry and player count for a random lobby."""
+        room_result = await db.execute(select(Room).where(Room.id == room_id))
+        room = room_result.scalar_one_or_none()
+        if room is None or room.status not in ("matchmaking_lobby", "in_progress"):
+            return None
+
+        player_count = await RoomService._room_player_count(db, room.id)
         now = datetime.now(UTC).replace(tzinfo=None)
-        updated = 0
+
+        return {
+            "room_id": room.id,
+            "status": room.status,
+            "player_count": player_count,
+            "max_players": room.max_players,
+            "fill_expires_at": room.matchmaking_fill_expires_at,
+            "seconds_remaining": (
+                int((room.matchmaking_fill_expires_at - now).total_seconds())
+                if room.matchmaking_fill_expires_at and room.matchmaking_fill_expires_at > now
+                else None
+            ),
+            "is_locked": room.status == "in_progress",
+        }
+
+    @staticmethod
+    async def process_matchmaking_tick(db: AsyncSession) -> list[dict]:
+        """Update matchmaking countdown state and lock rooms when ready. Return state changes."""
+        now = datetime.now(UTC).replace(tzinfo=None)
+        changes = []
 
         result = await db.execute(
             select(Room).where(
@@ -979,25 +1004,65 @@ class RoomService:
             # Cancel countdown if lobby drops below matchmaking threshold.
             if player_count < 3 and room.matchmaking_fill_expires_at is not None:
                 room.matchmaking_fill_expires_at = None
-                updated += 1
+                changes.append(
+                    {
+                        "room_id": room.id,
+                        "event": "matchmaking.countdown_canceled",
+                        "reason": "player_count_below_minimum",
+                        "player_count": player_count,
+                    }
+                )
                 continue
 
             # Start countdown once lobby has enough players.
             if player_count >= 3 and room.matchmaking_fill_expires_at is None:
                 room.matchmaking_fill_expires_at = now + timedelta(seconds=10)
-                updated += 1
+                changes.append(
+                    {
+                        "room_id": room.id,
+                        "event": "matchmaking.countdown_started",
+                        "expires_at": room.matchmaking_fill_expires_at,
+                        "seconds_remaining": 10,
+                        "player_count": player_count,
+                    }
+                )
                 continue
 
-            # Keep countdown rolling by resetting expired lobbies that still have 3-9 players.
-            if (
-                3 <= player_count < room.max_players
-                and room.matchmaking_fill_expires_at is not None
-                and room.matchmaking_fill_expires_at <= now
-            ):
-                room.matchmaking_fill_expires_at = now + timedelta(seconds=10)
-                updated += 1
+            # Check if room is full or countdown expired.
+            if room.matchmaking_fill_expires_at is not None:
+                # Room is full — lock immediately.
+                if player_count >= room.max_players:
+                    room.status = "in_progress"
+                    room.matchmaking_fill_expires_at = None
+                    changes.append(
+                        {
+                            "room_id": room.id,
+                            "event": "matchmaking.locked",
+                            "reason": "max_players_reached",
+                            "player_count": player_count,
+                        }
+                    )
+                    continue
 
-        if updated:
+                # Countdown expired — lock and start with 3-9 players.
+                if room.matchmaking_fill_expires_at <= now:
+                    room.status = "in_progress"
+                    room.matchmaking_fill_expires_at = None
+                    changes.append(
+                        {
+                            "room_id": room.id,
+                            "event": "matchmaking.locked",
+                            "reason": "timer_expired",
+                            "player_count": player_count,
+                        }
+                    )
+                    continue
+
+                # Countdown still running — emit reset if a new player joined.
+                # (Detected by checking if we're within 3 seconds of expiry and had room for another player.)
+                # For now, just continue.
+
+        if changes:
             await db.flush()
 
-        return updated
+        return changes

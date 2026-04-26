@@ -64,7 +64,7 @@ async def join_matchmaking_queue(
     """Enter random matchmaking queue and promote first 3 players into lobby."""
     redis_client = redis.from_url(settings.REDIS_URL)
     try:
-        queue_size, matched_room_id = await RoomService.enqueue_for_matchmaking(
+        queue_size, matched_room_id, _is_new_room = await RoomService.enqueue_for_matchmaking(
             db=db,
             redis_client=redis_client,
             user=current_user,

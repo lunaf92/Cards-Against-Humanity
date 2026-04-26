@@ -183,6 +183,20 @@ async def _handle_start_game(
         ).model_dump(mode="json"),
     )
 
+    if room.room_kind == "random" and room.status == "matchmaking_lobby":
+        player_count = await RoomService._room_player_count(db, room_id)
+        await connection_manager.broadcast_event(
+            room_id,
+            WSEvent(
+                event="matchmaking.locked",
+                room_id=room_id,
+                payload={
+                    "reason": "host_started",
+                    "player_count": player_count,
+                },
+            ).model_dump(mode="json"),
+        )
+
     await connection_manager.broadcast_event(
         room_id,
         WSEvent(
@@ -459,6 +473,35 @@ async def ws_room_channel(
                     payload={"player": player_joined_payload},
                 ).model_dump(mode="json"),
             )
+
+        if room.room_kind == "random" and room.status == "matchmaking_lobby":
+            player_count = await RoomService._room_player_count(db, room_id)
+            await connection_manager.broadcast_event(
+                room_id,
+                WSEvent(
+                    event="matchmaking.match_found",
+                    room_id=room_id,
+                    payload={
+                        "room_id": str(room_id),
+                        "player_count": player_count,
+                    },
+                ).model_dump(mode="json"),
+            )
+
+            countdown_state = await RoomService.get_matchmaking_state(db, room_id)
+            if countdown_state and countdown_state["fill_expires_at"] is not None:
+                await connection_manager.broadcast_event(
+                    room_id,
+                    WSEvent(
+                        event="matchmaking.countdown_started",
+                        room_id=room_id,
+                        payload={
+                            "expires_at": countdown_state["fill_expires_at"],
+                            "seconds_remaining": max(0, countdown_state["seconds_remaining"] or 0),
+                            "player_count": countdown_state["player_count"],
+                        },
+                    ).model_dump(mode="json"),
+                )
 
         while True:
             incoming = await websocket.receive_json()

@@ -9,7 +9,42 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import settings
 from app.models import Card
-from app.services.rooms import RoomService
+from app.routers import rooms as rooms_router
+from app.services.rooms import RoomService, MATCHMAKING_QUEUE_KEY
+
+
+class _FakeRedisClient:
+    """Minimal async fake Redis client supporting sorted-set queue operations."""
+
+    def __init__(self):
+        self._queue: dict[str, float] = {}
+
+    async def zadd(self, key: str, mapping: dict[str, float]):
+        assert key == "matchmaking:queue"
+        self._queue.update(mapping)
+
+    async def zcard(self, key: str):
+        assert key == "matchmaking:queue"
+        return len(self._queue)
+
+    async def zrange(self, key: str, start: int, end: int):
+        assert key == "matchmaking:queue"
+        ordered = sorted(self._queue.items(), key=lambda item: (item[1], item[0]))
+        if end == -1:
+            items = ordered[start:]
+        else:
+            items = ordered[start : end + 1]
+        return [member for member, _ in items]
+
+    async def zrem(self, key: str, member: str):
+        assert key == "matchmaking:queue"
+        if member in self._queue:
+            self._queue.pop(member)
+            return 1
+        return 0
+
+    async def close(self):
+        pass
 
 
 def _register_and_get_access_token(client, username: str, email: str | None = None) -> str:
@@ -187,6 +222,76 @@ def test_ws_lobby_presence_events_and_host_transfer_on_disconnect(client):
         assert host_changed["event"] == "room.host_changed"
         assert host_changed["payload"]["previous_host_id"] == transfer_host_player_id
         assert host_changed["payload"]["new_host_id"] == transfer_guest_player_id
+
+
+def test_ws_matchmaking_events_on_connect_to_random_lobby(client, monkeypatch):
+    """Random lobby sockets receive matchmaking.match_found and countdown_started on connect."""
+    fake_redis = _FakeRedisClient()
+    monkeypatch.setattr(rooms_router.redis, "from_url", lambda *_args, **_kwargs: fake_redis)
+
+    t1 = _register_and_get_access_token(client, "mm_user_1")
+    t2 = _register_and_get_access_token(client, "mm_user_2")
+    t3 = _register_and_get_access_token(client, "mm_user_3")
+
+    r1 = client.post("/rooms/queue", headers=_auth_headers(t1))
+    r2 = client.post("/rooms/queue", headers=_auth_headers(t2))
+    r3 = client.post("/rooms/queue", headers=_auth_headers(t3))
+
+    assert r3.json()["matched_room_id"] is not None
+    room_id = r3.json()["matched_room_id"]
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={t1}") as socket:
+        _consume_bootstrap(socket)
+
+        match_found = socket.receive_json()
+        assert match_found["event"] == "matchmaking.match_found"
+        assert match_found["payload"]["room_id"] == room_id
+        assert match_found["payload"]["player_count"] == 3
+
+        countdown_started = socket.receive_json()
+        assert countdown_started["event"] == "matchmaking.countdown_started"
+        assert countdown_started["payload"]["player_count"] == 3
+        assert countdown_started["payload"]["seconds_remaining"] == 10
+
+
+def test_ws_matchmaking_locked_when_host_starts_from_random_lobby(client, monkeypatch, test_db):
+    """Random lobby emits matchmaking.locked event when host starts game."""
+    _seed_cards(
+        test_db,
+        black_cards=[("Start prompt _", 1)],
+        white_cards=[f"Filler {index}" for index in range(30)],
+    )
+    fake_redis = _FakeRedisClient()
+    monkeypatch.setattr(rooms_router.redis, "from_url", lambda *_args, **_kwargs: fake_redis)
+
+    t1 = _register_and_get_access_token(client, "mm_host_start")
+    t2 = _register_and_get_access_token(client, "mm_guest_start_1")
+    t3 = _register_and_get_access_token(client, "mm_guest_start_2")
+
+    client.post("/rooms/queue", headers=_auth_headers(t1))
+    client.post("/rooms/queue", headers=_auth_headers(t2))
+    r3 = client.post("/rooms/queue", headers=_auth_headers(t3))
+    room_id = r3.json()["matched_room_id"]
+
+    with (
+        client.websocket_connect(f"/ws/rooms/{room_id}?token={t1}") as host_socket,
+        client.websocket_connect(f"/ws/rooms/{room_id}?token={t2}") as guest_socket,
+    ):
+        _consume_bootstrap(host_socket)
+        _consume_bootstrap(guest_socket)
+
+        _receive_broadcast([host_socket, guest_socket], "matchmaking.match_found")
+        _receive_broadcast([host_socket, guest_socket], "matchmaking.countdown_started")
+
+        host_socket.send_json({"event": "lobby.start_game", "payload": {}})
+
+        locked_event = host_socket.receive_json()
+        assert locked_event["event"] == "matchmaking.locked"
+        assert locked_event["payload"]["reason"] == "host_started"
+        assert locked_event["payload"]["player_count"] == 3
+
+        game_started = host_socket.receive_json()
+        assert game_started["event"] == "game.started"
 
 
 def test_ws_room_rejects_missing_token(client):
