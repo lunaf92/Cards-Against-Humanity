@@ -47,6 +47,22 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
 
+  worker:
+    build: .
+    container_name: cah_worker
+    command: sh -c "alembic upgrade head && python -m app.workers.matchmaking"
+    env_file:
+      - .envs/.env.dev
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+
 volumes:
   postgres_data:
   redis_data:

@@ -33,14 +33,14 @@ Goal: all non-real-time endpoints working. Parallel with nothing — depends on 
 7. PATCH /users/me — update username, email, and password
 
 ### Rooms
-8. POST /rooms — create private room; generate 6-char code; store config (max players, winning score, timer, card_pool_mode); hash room password with bcrypt
-9. POST /rooms/join — join by code + password; validate capacity; insert RoomPlayer row
-10. POST /rooms/queue — enter random matchmaking queue (Redis sorted set by join time); matcher promotes first 3 players into a random matchmaking_lobby room
-11. DELETE /rooms/queue — leave the matchmaking queue
-12. GET /rooms/{id} — room details + current player list (for reconnect restoration)
-13. PATCH /rooms/{id}/config — host-only; update room settings while in lobby status
-14. Add room fields for random flow: room_kind and matchmaking_fill_expires_at
-15. Add matcher worker service for rolling 10-second fill countdown and reset logic
+8. ✅ POST /rooms — create private room; generate 6-char code; store config (max players, winning score, timer, card_pool_mode); hash room password with bcrypt
+9. ✅ POST /rooms/join — join by code + password; validate capacity; insert RoomPlayer row
+10. ✅ POST /rooms/queue — enter random matchmaking queue (Redis sorted set by join time); queue promotes first 3 players into a random matchmaking_lobby room
+11. ✅ DELETE /rooms/queue — leave the matchmaking queue
+12. ✅ GET /rooms/{id} — room details + current player list (for reconnect restoration)
+13. ✅ PATCH /rooms/{id}/config — host-only; update room settings while in lobby status
+14. ✅ Add room fields for random flow: room_kind and matchmaking_fill_expires_at
+15. ✅ Add matcher worker service for rolling 10-second fill countdown and reset logic
 
 _Verify_: run endpoint checks against compose-hosted API; confirm card guard blocks edits during active games.
 

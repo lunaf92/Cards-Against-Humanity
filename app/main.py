@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routers import auth, cards, health, users
+from app.routers import auth, cards, health, rooms, users
 
 # Create FastAPI app with OpenAPI documentation
 app = FastAPI(
@@ -28,6 +28,7 @@ app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(cards.router)
 app.include_router(users.router)
+app.include_router(rooms.router)
 
 # Note: Database schema is managed by Alembic migrations.
 # Always run 'alembic upgrade head' before starting the app to ensure schema is current.

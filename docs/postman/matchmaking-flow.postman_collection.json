@@ -1,0 +1,481 @@
+{
+    "info": {
+        "_postman_id": "8b72f466-7a5a-4f39-8b4e-7ed6b4a25f00",
+        "name": "CAH Matchmaking Flow",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "00 Health",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/health",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "health"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Health is 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"Service is healthy\", function () {",
+                            "  pm.expect(body.status).to.eql(\"healthy\");",
+                            "});"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "01 Register User 1",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"username\": \"p1_{{$timestamp}}\",\n  \"email\": \"p1_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/auth/register",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "auth",
+                        "register"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Register user 1 returns 201\", function () {",
+                            "  pm.response.to.have.status(201);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.environment.set(\"u1_access\", body.access_token);",
+                            "pm.environment.set(\"u1_refresh\", body.refresh_token);"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "02 Register User 2",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"username\": \"p2_{{$timestamp}}\",\n  \"email\": \"p2_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/auth/register",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "auth",
+                        "register"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Register user 2 returns 201\", function () {",
+                            "  pm.response.to.have.status(201);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.environment.set(\"u2_access\", body.access_token);",
+                            "pm.environment.set(\"u2_refresh\", body.refresh_token);"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "03 Register User 3",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"username\": \"p3_{{$timestamp}}\",\n  \"email\": \"p3_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/auth/register",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "auth",
+                        "register"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Register user 3 returns 201\", function () {",
+                            "  pm.response.to.have.status(201);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.environment.set(\"u3_access\", body.access_token);",
+                            "pm.environment.set(\"u3_refresh\", body.refresh_token);"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "04 Register User 4",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"username\": \"p4_{{$timestamp}}\",\n  \"email\": \"p4_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/auth/register",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "auth",
+                        "register"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Register user 4 returns 201\", function () {",
+                            "  pm.response.to.have.status(201);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.environment.set(\"u4_access\", body.access_token);",
+                            "pm.environment.set(\"u4_refresh\", body.refresh_token);"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "05 Queue User 1",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u1_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/queue",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "queue"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Queue user 1 returns 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"Not matched yet\", function () {",
+                            "  pm.expect(body.matched_room_id).to.eql(null);",
+                            "});"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "06 Queue User 2",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u2_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/queue",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "queue"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Queue user 2 returns 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"Still not matched yet\", function () {",
+                            "  pm.expect(body.matched_room_id).to.eql(null);",
+                            "});"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "07 Queue User 3 and Create Match",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u3_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/queue",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "queue"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Queue user 3 returns 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"Match should be created\", function () {",
+                            "  pm.expect(body.matched_room_id).to.not.eql(null);",
+                            "});",
+                            "pm.environment.set(\"matched_room_id\", body.matched_room_id);"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "08 Get Matched Room as User 1",
+            "request": {
+                "method": "GET",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u1_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/{{matched_room_id}}",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "{{matched_room_id}}"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Room fetch returns 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"Room is random lobby\", function () {",
+                            "  pm.expect(body.room_kind).to.eql(\"random\");",
+                            "  pm.expect(body.status).to.eql(\"matchmaking_lobby\");",
+                            "});",
+                            "pm.test(\"Has at least 3 players\", function () {",
+                            "  pm.expect(body.players.length).to.be.at.least(3);",
+                            "});",
+                            "pm.environment.set(\"fill_expires_before_u4\", body.matchmaking_fill_expires_at);"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "09 Queue User 4 Fill Existing Lobby",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u4_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/queue",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "queue"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Queue user 4 returns 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"User 4 should join existing match\", function () {",
+                            "  pm.expect(body.matched_room_id).to.eql(pm.environment.get(\"matched_room_id\"));",
+                            "});"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "10 Get Room Again and Confirm Reset",
+            "request": {
+                "method": "GET",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u1_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/{{matched_room_id}}",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "{{matched_room_id}}"
+                    ]
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "exec": [
+                            "pm.test(\"Room fetch after user 4 returns 200\", function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "const body = pm.response.json();",
+                            "pm.test(\"Has at least 4 players\", function () {",
+                            "  pm.expect(body.players.length).to.be.at.least(4);",
+                            "});",
+                            "pm.test(\"Countdown timestamp present\", function () {",
+                            "  pm.expect(body.matchmaking_fill_expires_at).to.not.eql(null);",
+                            "});"
+                        ],
+                        "type": "text/javascript"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "11 Leave Queue User 1 Idempotency Check",
+            "request": {
+                "method": "DELETE",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{u1_access}}"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/rooms/queue",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "rooms",
+                        "queue"
+                    ]
+                }
+            }
+        }
+    ],
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:8000"
+        }
+    ]
+}
