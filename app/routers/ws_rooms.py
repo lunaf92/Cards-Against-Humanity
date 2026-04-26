@@ -394,6 +394,7 @@ async def ws_room_channel(
     """Handle authenticated room channel session and baseline protocol commands."""
     connected_user_id: UUID | None = None
     authenticated_user_id: UUID | None = None
+    player_joined_payload: dict | None = None
     redis_client = redis.from_url(settings.REDIS_URL)
 
     try:
@@ -417,8 +418,18 @@ async def ws_room_channel(
             await websocket.close(code=4403)
             return
 
+        had_existing_socket = connection_manager.has_user_connections(room_id, authenticated_user_id)
         await connection_manager.connect(room_id, authenticated_user_id, websocket)
         connected_user_id = authenticated_user_id
+
+        if not had_existing_socket:
+            player_joined_payload = await RoomService.mark_player_connection_state(
+                db,
+                room_id,
+                authenticated_user_id,
+                is_connected=True,
+            )
+            await db.commit()
 
         connected_event = WSEvent(
             event="room.connected",
@@ -438,6 +449,16 @@ async def ws_room_channel(
         )
         sync_event = WSEvent(event="room.state_sync", room_id=room_id, payload=sync_payload)
         await websocket.send_json(sync_event.model_dump(mode="json"))
+
+        if player_joined_payload is not None and connection_manager.has_other_connected_users(room_id, authenticated_user_id):
+            await connection_manager.broadcast_event(
+                room_id,
+                WSEvent(
+                    event="room.player_joined",
+                    room_id=room_id,
+                    payload={"player": player_joined_payload},
+                ).model_dump(mode="json"),
+            )
 
         while True:
             incoming = await websocket.receive_json()
@@ -534,4 +555,39 @@ async def ws_room_channel(
     finally:
         await redis_client.aclose()
         if connected_user_id is not None:
-            connection_manager.disconnect(room_id, connected_user_id, websocket)
+            disconnected_user = connection_manager.disconnect(room_id, connected_user_id, websocket)
+            if disconnected_user:
+                disconnect_outcome = await RoomService.handle_lobby_disconnect(
+                    db,
+                    room_id,
+                    connected_user_id,
+                )
+                await db.commit()
+
+                room_status = disconnect_outcome.get("room_status")
+                if room_status in ("lobby", "matchmaking_lobby"):
+                    await connection_manager.broadcast_event(
+                        room_id,
+                        WSEvent(
+                            event="room.player_left",
+                            room_id=room_id,
+                            payload={
+                                "player_id": str(connected_user_id),
+                                "reason": "disconnect",
+                            },
+                        ).model_dump(mode="json"),
+                    )
+
+                    host_changed = disconnect_outcome.get("host_changed")
+                    if host_changed is not None:
+                        await connection_manager.broadcast_event(
+                            room_id,
+                            WSEvent(
+                                event="room.host_changed",
+                                room_id=room_id,
+                                payload={
+                                    "previous_host_id": str(host_changed["previous_host_id"]),
+                                    "new_host_id": str(host_changed["new_host_id"]),
+                                },
+                            ).model_dump(mode="json"),
+                        )

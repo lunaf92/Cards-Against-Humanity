@@ -123,9 +123,70 @@ def _get_current_hand(room_id: str, user_id: str) -> list[str]:
 
 def _receive_broadcast(websockets, expected_event: str) -> list[dict]:
     """Receive the next broadcast event on all connected room websockets."""
-    events = [websocket.receive_json() for websocket in websockets]
-    assert all(event["event"] == expected_event for event in events)
+    skipped_events = {"room.player_joined", "room.player_left", "room.host_changed"}
+    events = []
+    for websocket in websockets:
+        for _ in range(6):
+            event = websocket.receive_json()
+            if event["event"] == expected_event:
+                events.append(event)
+                break
+            assert event["event"] in skipped_events
+        else:
+            assert False, f"Expected {expected_event} event"
+
     return events
+
+
+def test_ws_lobby_presence_events_and_host_transfer_on_disconnect(client):
+    """Lobby sockets receive join/leave presence updates and host transfer on disconnect."""
+    host_token = _register_and_get_access_token(client, "ws_presence_host")
+    guest_token = _register_and_get_access_token(client, "ws_presence_guest")
+
+    room_id, room_code = _create_private_room_with_code(client, host_token)
+    _join_room(client, guest_token, room_code, "roompass")
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={host_token}") as host_socket:
+        host_sync = _consume_bootstrap(host_socket)
+        host_player_id = _get_player_id(host_sync, "ws_presence_host")
+        guest_player_id = _get_player_id(host_sync, "ws_presence_guest")
+
+        with client.websocket_connect(f"/ws/rooms/{room_id}?token={guest_token}") as guest_socket:
+            _consume_bootstrap(guest_socket)
+
+            joined_event = host_socket.receive_json()
+            assert joined_event["event"] == "room.player_joined"
+            assert joined_event["payload"]["player"]["player_id"] == guest_player_id
+            assert joined_event["payload"]["player"]["is_connected"] is True
+
+        left_event = host_socket.receive_json()
+        assert left_event["event"] == "room.player_left"
+        assert left_event["payload"]["player_id"] == guest_player_id
+        assert left_event["payload"]["reason"] == "disconnect"
+
+    transfer_room_id, transfer_room_code = _create_private_room_with_code(client, host_token)
+    _join_room(client, guest_token, transfer_room_code, "roompass")
+
+    with client.websocket_connect(f"/ws/rooms/{transfer_room_id}?token={guest_token}") as guest_socket:
+        guest_sync = _consume_bootstrap(guest_socket)
+        transfer_host_player_id = _get_player_id(guest_sync, "ws_presence_host")
+        transfer_guest_player_id = _get_player_id(guest_sync, "ws_presence_guest")
+
+        with client.websocket_connect(f"/ws/rooms/{transfer_room_id}?token={host_token}") as host_socket:
+            _consume_bootstrap(host_socket)
+
+            joined_event = guest_socket.receive_json()
+            assert joined_event["event"] == "room.player_joined"
+            assert joined_event["payload"]["player"]["player_id"] == transfer_host_player_id
+
+        left_event = guest_socket.receive_json()
+        assert left_event["event"] == "room.player_left"
+        assert left_event["payload"]["player_id"] == transfer_host_player_id
+
+        host_changed = guest_socket.receive_json()
+        assert host_changed["event"] == "room.host_changed"
+        assert host_changed["payload"]["previous_host_id"] == transfer_host_player_id
+        assert host_changed["payload"]["new_host_id"] == transfer_guest_player_id
 
 
 def test_ws_room_rejects_missing_token(client):

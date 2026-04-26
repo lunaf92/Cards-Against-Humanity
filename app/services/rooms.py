@@ -712,6 +712,108 @@ class RoomService:
         ]
 
     @staticmethod
+    async def get_room_player_snapshot(db: AsyncSession, room_id: UUID, user_id: UUID) -> dict | None:
+        """Return one player snapshot for websocket presence events."""
+        result = await db.execute(
+            select(RoomPlayer, User)
+            .join(User, RoomPlayer.player_id == User.id)
+            .where(
+                RoomPlayer.room_id == room_id,
+                RoomPlayer.player_id == user_id,
+            )
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None
+
+        room_player, user = row
+        return {
+            "player_id": user.id,
+            "username": user.username,
+            "join_order": room_player.join_order,
+            "score": room_player.score,
+            "is_connected": room_player.is_connected,
+        }
+
+    @staticmethod
+    async def mark_player_connection_state(
+        db: AsyncSession,
+        room_id: UUID,
+        user_id: UUID,
+        *,
+        is_connected: bool,
+    ) -> dict | None:
+        """Persist room member connection state and return player snapshot."""
+        member_result = await db.execute(
+            select(RoomPlayer).where(
+                RoomPlayer.room_id == room_id,
+                RoomPlayer.player_id == user_id,
+            )
+        )
+        member = member_result.scalar_one_or_none()
+        if member is None:
+            return None
+
+        member.is_connected = is_connected
+        await db.flush()
+        return await RoomService.get_room_player_snapshot(db, room_id, user_id)
+
+    @staticmethod
+    async def handle_lobby_disconnect(
+        db: AsyncSession,
+        room_id: UUID,
+        user_id: UUID,
+    ) -> dict:
+        """Mark disconnect and transfer host in lobby-style rooms when needed."""
+        player = await RoomService.mark_player_connection_state(
+            db,
+            room_id,
+            user_id,
+            is_connected=False,
+        )
+
+        result = {
+            "player": player,
+            "host_changed": None,
+            "room_status": None,
+        }
+
+        room_result = await db.execute(select(Room).where(Room.id == room_id))
+        room = room_result.scalar_one_or_none()
+        if room is None:
+            return result
+
+        result["room_status"] = room.status
+        if room.status not in ("lobby", "matchmaking_lobby"):
+            return result
+
+        if room.host_id != user_id:
+            return result
+
+        next_host_result = await db.execute(
+            select(RoomPlayer.player_id)
+            .where(
+                RoomPlayer.room_id == room_id,
+                RoomPlayer.player_id != user_id,
+            )
+            .order_by(RoomPlayer.join_order.asc())
+            .limit(1)
+        )
+        next_host_id = next_host_result.scalar_one_or_none()
+        previous_host_id = room.host_id
+        room.host_id = next_host_id
+        await db.flush()
+
+        if next_host_id is not None:
+            result["host_changed"] = {
+                "previous_host_id": previous_host_id,
+                "new_host_id": next_host_id,
+            }
+
+        return result
+
+    @staticmethod
     async def update_room_config(
         db: AsyncSession,
         room_id: UUID,
