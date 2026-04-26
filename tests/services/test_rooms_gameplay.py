@@ -185,3 +185,41 @@ def test_pick_winner_refills_hands_for_next_round(test_db):
             assert len(await RoomService.get_player_hand(redis, room.id, users[2].id)) == 10
 
     asyncio.run(_run())
+
+
+def test_handle_player_timeout_skips_waiting_round_when_czar_times_out(test_db):
+    """Timed-out active czar is removed and gameplay advances to the next round."""
+
+    async def _run():
+        async with test_db() as session:
+            redis = _FakeRedisClient()
+            users = await _create_users(session, 4, "timeout_czar")
+            room = await _create_room_with_players(session, users)
+            await _seed_cards(
+                session,
+                black_cards=[("Timeout prompt _", 1), ("Timeout next _", 1)],
+                white_total=50,
+            )
+
+            started = await RoomService.start_game(session, room, users[0].id, redis)
+            timeout_outcome = await RoomService.handle_player_timeout(
+                session,
+                redis,
+                room.id,
+                users[0].id,
+            )
+
+            assert timeout_outcome["czar_timed_out"] is True
+            assert timeout_outcome["skipped_round_id"] == started["round"].id
+            assert timeout_outcome["next_round"] is not None
+            assert timeout_outcome["next_round"].round_number == started["round"].round_number + 1
+            assert timeout_outcome["next_round"].czar_id != users[0].id
+
+            players = await RoomService._ordered_room_player_rows(session, room.id)
+            remaining_player_ids = {player.player_id for player in players}
+            assert users[0].id not in remaining_player_ids
+
+            timed_out_hand = await RoomService.get_player_hand(redis, room.id, users[0].id)
+            assert timed_out_hand == []
+
+    asyncio.run(_run())

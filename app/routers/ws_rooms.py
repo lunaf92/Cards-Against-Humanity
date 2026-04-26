@@ -151,6 +151,16 @@ async def _run_reconnect_timeout(room_id: UUID, player_id: UUID) -> None:
                 return
 
             await RoomService.clear_reconnect_window(redis_client, room_id, player_id)
+
+            async with async_session() as db:
+                timeout_outcome = await RoomService.handle_player_timeout(
+                    db,
+                    redis_client,
+                    room_id,
+                    player_id,
+                )
+                await db.commit()
+
             await connection_manager.broadcast_event(
                 room_id,
                 WSEvent(
@@ -162,6 +172,35 @@ async def _run_reconnect_timeout(room_id: UUID, player_id: UUID) -> None:
                     },
                 ).model_dump(mode="json"),
             )
+
+            if timeout_outcome["czar_timed_out"] and timeout_outcome["next_round"] is not None:
+                next_round = timeout_outcome["next_round"]
+                next_black_card = timeout_outcome["next_black_card"]
+                skipped_round_id = timeout_outcome.get("skipped_round_id")
+                round_timer_seconds = int(timeout_outcome.get("round_timer_seconds") or RECONNECT_WINDOW_TTL)
+                if skipped_round_id is not None:
+                    _cancel_round_timer_task(room_id, skipped_round_id)
+
+                round_expires_at = datetime.now(UTC) + timedelta(seconds=round_timer_seconds)
+                await connection_manager.broadcast_event(
+                    room_id,
+                    WSEvent(
+                        event="round.started",
+                        room_id=room_id,
+                        payload={
+                            "round_id": str(next_round.id),
+                            "round_number": next_round.round_number,
+                            "czar_id": str(next_round.czar_id),
+                            "black_card": {
+                                "id": str(next_black_card.id),
+                                "text": next_black_card.text,
+                                "pick": next_black_card.pick,
+                            },
+                            "round_expires_at": round_expires_at,
+                        },
+                    ).model_dump(mode="json"),
+                )
+                _schedule_round_timer_task(room_id, next_round.id, round_timer_seconds)
         finally:
             await redis_client.aclose()
     except asyncio.CancelledError:

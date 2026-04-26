@@ -827,6 +827,93 @@ class RoomService:
         return result
 
     @staticmethod
+    async def handle_player_timeout(
+        db: AsyncSession,
+        redis_client,
+        room_id: UUID,
+        player_id: UUID,
+    ) -> dict:
+        """Remove timed-out player and skip active round when timed-out player is the czar."""
+        result = {
+            "removed_player_id": player_id,
+            "czar_timed_out": False,
+            "next_round": None,
+            "next_black_card": None,
+            "skipped_round_id": None,
+            "round_timer_seconds": None,
+        }
+
+        room_result = await db.execute(select(Room).where(Room.id == room_id))
+        room = room_result.scalar_one_or_none()
+        if room is None:
+            return result
+        result["round_timer_seconds"] = room.round_timer_seconds
+
+        # Remove player membership and hand state.
+        await db.execute(
+            RoomPlayer.__table__.delete().where(
+                RoomPlayer.room_id == room_id,
+                RoomPlayer.player_id == player_id,
+            )
+        )
+        await redis_client.delete(RoomService._player_hand_key(room_id, player_id))
+
+        if room.host_id == player_id:
+            next_host_result = await db.execute(
+                select(RoomPlayer.player_id)
+                .where(RoomPlayer.room_id == room_id)
+                .order_by(RoomPlayer.join_order.asc())
+                .limit(1)
+            )
+            room.host_id = next_host_result.scalar_one_or_none()
+
+        if room.status != "in_progress":
+            await db.flush()
+            return result
+
+        players = await RoomService._ordered_room_player_rows(db, room_id)
+        if len(players) < 3:
+            room.status = "finished"
+            await db.flush()
+            return result
+
+        current_round_result = await db.execute(
+            select(GameRound)
+            .where(GameRound.room_id == room_id, GameRound.status == "waiting")
+            .order_by(GameRound.round_number.desc())
+            .limit(1)
+        )
+        current_round = current_round_result.scalar_one_or_none()
+        if current_round is None:
+            await db.flush()
+            return result
+
+        if current_round.czar_id != player_id:
+            await db.flush()
+            return result
+
+        result["czar_timed_out"] = True
+        result["skipped_round_id"] = current_round.id
+        current_round.status = "complete"
+
+        # Drop any pending submissions from timed-out round and move to next czar.
+        await db.execute(
+            Submission.__table__.delete().where(Submission.round_id == current_round.id)
+        )
+
+        next_czar_id = await RoomService._next_czar_id(db, room_id, current_round.czar_id)
+        next_round, next_black_card = await RoomService._create_round(
+            db,
+            room,
+            current_round.round_number + 1,
+            next_czar_id,
+        )
+        result["next_round"] = next_round
+        result["next_black_card"] = next_black_card
+        await db.flush()
+        return result
+
+    @staticmethod
     async def update_room_config(
         db: AsyncSession,
         room_id: UUID,

@@ -78,7 +78,7 @@ Goal: real-time multiplayer works end-to-end. This is the most complex phase. De
 ### Disconnect/reconnect
 19. ✅ On disconnect during game → store disconnected_at timestamp in Redis; keep player in room for 60s
 20. ✅ On reconnect within window → restore hand from Redis, send current game state via game_state_sync event
-21. ✅ On timeout → remove player, discard hand; if Czar, skip round (step 13 with next Czar)
+21. ✅ On timeout → remove player, discard hand; if Czar, skip round (step 13 with next Czar) and auto-emit next `round.started` (validated by regression test)
 
 _Verify_: manual multiplayer test against compose-hosted backend with 3 browser/wscat clients; simulate disconnection and timer expiry.
 
