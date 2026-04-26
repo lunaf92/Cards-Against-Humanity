@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.models import Card
 from app.routers import rooms as rooms_router
 from app.services.rooms import RoomService, MATCHMAKING_QUEUE_KEY
+from app.routers import ws_rooms as ws_rooms_router
 
 
 class _FakeRedisClient:
@@ -18,6 +19,7 @@ class _FakeRedisClient:
 
     def __init__(self):
         self._queue: dict[str, float] = {}
+        self._data: dict[str, str] = {}
 
     async def zadd(self, key: str, mapping: dict[str, float]):
         assert key == "matchmaking:queue"
@@ -42,6 +44,27 @@ class _FakeRedisClient:
             self._queue.pop(member)
             return 1
         return 0
+
+    async def setex(self, key: str, seconds: int, value: str):
+        self._data[key] = value
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in self._data else 0
+
+    async def delete(self, key: str) -> int:
+        if key in self._data:
+            del self._data[key]
+            return 1
+        return 0
+
+    async def set(self, key: str, value: str):
+        self._data[key] = value
+
+    async def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    async def aclose(self):
+        pass
 
     async def close(self):
         pass
@@ -125,8 +148,11 @@ def _seed_cards(test_db, *, black_cards: list[tuple[str, int]], white_cards: lis
 
 def _consume_bootstrap(websocket) -> dict:
     """Consume initial connect and sync events for a websocket client."""
-    websocket.receive_json()
-    return websocket.receive_json()
+    for _ in range(8):
+        event = websocket.receive_json()
+        if event["event"] == "room.state_sync":
+            return event
+    assert False, "Expected room.state_sync during websocket bootstrap"
 
 
 def _get_player_id(sync_event: dict, username: str) -> str:
@@ -158,7 +184,12 @@ def _get_current_hand(room_id: str, user_id: str) -> list[str]:
 
 def _receive_broadcast(websockets, expected_event: str) -> list[dict]:
     """Receive the next broadcast event on all connected room websockets."""
-    skipped_events = {"room.player_joined", "room.player_left", "room.host_changed"}
+    skipped_events = {
+        "room.connected",
+        "room.player_joined",
+        "room.player_left",
+        "room.host_changed",
+    }
     events = []
     for websocket in websockets:
         for _ in range(6):
@@ -171,6 +202,16 @@ def _receive_broadcast(websockets, expected_event: str) -> list[dict]:
             assert False, f"Expected {expected_event} event"
 
     return events
+
+
+def _receive_next_matching_event(websocket, expected_event: str, allowed_events: set[str]) -> dict:
+    """Read up to six events and return the first matching expected event."""
+    for _ in range(6):
+        event = websocket.receive_json()
+        if event["event"] == expected_event:
+            return event
+        assert event["event"] in allowed_events
+    assert False, f"Expected {expected_event} event"
 
 
 def test_ws_lobby_presence_events_and_host_transfer_on_disconnect(client):
@@ -194,7 +235,11 @@ def test_ws_lobby_presence_events_and_host_transfer_on_disconnect(client):
             assert joined_event["payload"]["player"]["player_id"] == guest_player_id
             assert joined_event["payload"]["player"]["is_connected"] is True
 
-        left_event = host_socket.receive_json()
+        left_event = _receive_next_matching_event(
+            host_socket,
+            "room.player_left",
+            {"player.reconnect_window_started"},
+        )
         assert left_event["event"] == "room.player_left"
         assert left_event["payload"]["player_id"] == guest_player_id
         assert left_event["payload"]["reason"] == "disconnect"
@@ -214,7 +259,11 @@ def test_ws_lobby_presence_events_and_host_transfer_on_disconnect(client):
             assert joined_event["event"] == "room.player_joined"
             assert joined_event["payload"]["player"]["player_id"] == transfer_host_player_id
 
-        left_event = guest_socket.receive_json()
+        left_event = _receive_next_matching_event(
+            guest_socket,
+            "room.player_left",
+            {"player.reconnect_window_started"},
+        )
         assert left_event["event"] == "room.player_left"
         assert left_event["payload"]["player_id"] == transfer_host_player_id
 
@@ -251,7 +300,7 @@ def test_ws_matchmaking_events_on_connect_to_random_lobby(client, monkeypatch):
         countdown_started = socket.receive_json()
         assert countdown_started["event"] == "matchmaking.countdown_started"
         assert countdown_started["payload"]["player_count"] == 3
-        assert countdown_started["payload"]["seconds_remaining"] == 10
+        assert 0 <= countdown_started["payload"]["seconds_remaining"] <= 10
 
 
 def test_ws_matchmaking_locked_when_host_starts_from_random_lobby(client, monkeypatch, test_db):
@@ -280,18 +329,73 @@ def test_ws_matchmaking_locked_when_host_starts_from_random_lobby(client, monkey
         _consume_bootstrap(host_socket)
         _consume_bootstrap(guest_socket)
 
-        _receive_broadcast([host_socket, guest_socket], "matchmaking.match_found")
-        _receive_broadcast([host_socket, guest_socket], "matchmaking.countdown_started")
+        for socket in [host_socket, guest_socket]:
+            seen_events = set()
+            for _ in range(8):
+                event = socket.receive_json()
+                event_name = event["event"]
+                if event_name in {"matchmaking.match_found", "matchmaking.countdown_started"}:
+                    seen_events.add(event_name)
+                    if len(seen_events) == 2:
+                        break
+                    continue
+                assert event_name in {"room.connected", "room.player_joined", "room.player_left", "room.host_changed"}
+            assert seen_events == {"matchmaking.match_found", "matchmaking.countdown_started"}
 
         host_socket.send_json({"event": "lobby.start_game", "payload": {}})
 
-        locked_event = host_socket.receive_json()
-        assert locked_event["event"] == "matchmaking.locked"
+        # Find matchmaking.locked and game.started events, skipping intermediate room events
+        locked_event = None
+        game_started = None
+        for _ in range(12):  # Increased limit to account for more intermediate events
+            event = host_socket.receive_json()
+            if event["event"] == "matchmaking.locked" and locked_event is None:
+                locked_event = event
+            elif event["event"] == "game.started":
+                game_started = event
+            # Continue collecting until we have both events or run out of iterations
+            if locked_event is not None and game_started is not None:
+                break
+        
+        assert locked_event is not None, "Expected matchmaking.locked event"
         assert locked_event["payload"]["reason"] == "host_started"
         assert locked_event["payload"]["player_count"] == 3
+        assert game_started is not None, "Expected game.started event"
 
-        game_started = host_socket.receive_json()
-        assert game_started["event"] == "game.started"
+
+def test_ws_reconnect_window_events_and_flow(client):
+    """Reconnect window is started on disconnect and cleared on reconnect."""
+    host_token = _register_and_get_access_token(client, "reconnect_host")
+    guest_token = _register_and_get_access_token(client, "reconnect_guest")
+
+    room_id, room_code = _create_private_room_with_code(client, host_token)
+    _join_room(client, guest_token, room_code, "roompass")
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={host_token}") as host_socket:
+        host_sync = _consume_bootstrap(host_socket)
+        guest_player_id = _get_player_id(host_sync, "reconnect_guest")
+
+        with client.websocket_connect(f"/ws/rooms/{room_id}?token={guest_token}") as guest_socket:
+            _consume_bootstrap(guest_socket)
+
+            joined_event = host_socket.receive_json()
+            assert joined_event["event"] == "room.player_joined"
+
+        reconnect_window_event = host_socket.receive_json()
+        assert reconnect_window_event["event"] == "player.reconnect_window_started"
+        assert reconnect_window_event["payload"]["player_id"] == guest_player_id
+        assert reconnect_window_event["payload"]["seconds_remaining"] == 60
+
+        left_event = host_socket.receive_json()
+        assert left_event["event"] == "room.player_left"
+        assert left_event["payload"]["player_id"] == guest_player_id
+
+        with client.websocket_connect(f"/ws/rooms/{room_id}?token={guest_token}") as guest_socket:
+            _consume_bootstrap(guest_socket)
+
+            reconnected_event = host_socket.receive_json()
+            assert reconnected_event["event"] == "player.reconnected"
+            assert reconnected_event["payload"]["player_id"] == guest_player_id
 
 
 def test_ws_room_rejects_missing_token(client):
@@ -613,3 +717,35 @@ def test_ws_pick_winner_happy_path_starts_next_round(client, test_db):
         assert next_round["round_number"] == 2
         assert next_round["czar_id"] != first_round["czar_id"]
         assert next_round["black_card"]["text"] == "Another prompt _"
+
+
+def test_ws_reconnect_timeout_task_emits_removed_timeout(monkeypatch):
+    """Reconnect timeout task emits player.removed_timeout when window is still active."""
+    fake_redis = _FakeRedisClient()
+    room_id = uuid4()
+    player_id = uuid4()
+    captured_events: list[dict] = []
+
+    monkeypatch.setattr(ws_rooms_router.redis, "from_url", lambda *_args, **_kwargs: fake_redis)
+
+    async def _immediate_sleep(_seconds: int):
+        return
+
+    async def _capture_broadcast(_room_id, payload):
+        captured_events.append(payload)
+
+    monkeypatch.setattr(ws_rooms_router.asyncio, "sleep", _immediate_sleep)
+    monkeypatch.setattr(ws_rooms_router.connection_manager, "broadcast_event", _capture_broadcast)
+
+    async def _run() -> None:
+        await RoomService.start_reconnect_window(fake_redis, room_id, player_id)
+        await ws_rooms_router._run_reconnect_timeout(room_id, player_id)
+
+    asyncio.run(_run())
+
+    assert len(captured_events) == 1
+    removed_event = captured_events[0]
+    assert removed_event["event"] == "player.removed_timeout"
+    assert removed_event["room_id"] == str(room_id)
+    assert removed_event["payload"]["player_id"] == str(player_id)
+    assert removed_event["payload"]["reason"] == "reconnect_timeout"

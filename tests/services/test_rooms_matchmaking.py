@@ -63,17 +63,26 @@ def test_enqueue_waits_until_third_player_before_matching(test_db):
             redis = _FakeRedisClient()
             users = await _create_users(session, 3, "queued")
 
-            queue_size, matched_room_id = await RoomService.enqueue_for_matchmaking(session, redis, users[0])
+            queue_size, matched_room_id, is_new_room = await RoomService.enqueue_for_matchmaking(
+                session, redis, users[0]
+            )
             assert queue_size == 1
             assert matched_room_id is None
+            assert is_new_room is False
 
-            queue_size, matched_room_id = await RoomService.enqueue_for_matchmaking(session, redis, users[1])
+            queue_size, matched_room_id, is_new_room = await RoomService.enqueue_for_matchmaking(
+                session, redis, users[1]
+            )
             assert queue_size == 2
             assert matched_room_id is None
+            assert is_new_room is False
 
-            queue_size, matched_room_id = await RoomService.enqueue_for_matchmaking(session, redis, users[2])
+            queue_size, matched_room_id, is_new_room = await RoomService.enqueue_for_matchmaking(
+                session, redis, users[2]
+            )
             assert queue_size == 0
             assert matched_room_id is not None
+            assert is_new_room is True
 
             room = await session.get(Room, matched_room_id)
             assert room is not None
@@ -121,10 +130,13 @@ def test_enqueue_fills_existing_open_lobby_and_resets_window(test_db):
             await session.flush()
 
             expires_before = room.matchmaking_fill_expires_at
-            queue_size, matched_room_id = await RoomService.enqueue_for_matchmaking(session, redis, users[3])
+            queue_size, matched_room_id, is_new_room = await RoomService.enqueue_for_matchmaking(
+                session, redis, users[3]
+            )
 
             assert queue_size == 0
             assert matched_room_id == room.id
+            assert is_new_room is False
             assert room.matchmaking_fill_expires_at is not None
             assert room.matchmaking_fill_expires_at > expires_before
 
@@ -134,8 +146,8 @@ def test_enqueue_fills_existing_open_lobby_and_resets_window(test_db):
     asyncio.run(_run())
 
 
-def test_process_matchmaking_tick_resets_expired_countdown_when_lobby_not_full(test_db):
-    """Expired countdown is restarted for 3..max-1 players in matchmaking lobby."""
+def test_process_matchmaking_tick_locks_room_when_countdown_expires(test_db):
+    """Expired countdown locks matchmaking lobby and emits timer_expired event."""
 
     async def _run():
         async with test_db() as session:
@@ -168,11 +180,14 @@ def test_process_matchmaking_tick_resets_expired_countdown_when_lobby_not_full(t
             await session.flush()
 
             previous_expiry = room.matchmaking_fill_expires_at
-            updated = await RoomService.process_matchmaking_tick(session)
+            changes = await RoomService.process_matchmaking_tick(session)
 
-            assert updated == 1
-            assert room.matchmaking_fill_expires_at is not None
-            assert room.matchmaking_fill_expires_at > previous_expiry
+            assert len(changes) == 1
+            assert changes[0]["room_id"] == room.id
+            assert changes[0]["event"] == "matchmaking.locked"
+            assert changes[0]["reason"] == "timer_expired"
+            assert room.status == "in_progress"
+            assert room.matchmaking_fill_expires_at is None
 
     asyncio.run(_run())
 
@@ -211,10 +226,14 @@ def test_process_matchmaking_tick_does_not_reset_when_room_is_full(test_db):
             await session.flush()
 
             previous_expiry = room.matchmaking_fill_expires_at
-            updated = await RoomService.process_matchmaking_tick(session)
+            changes = await RoomService.process_matchmaking_tick(session)
 
-            assert updated == 0
-            assert room.matchmaking_fill_expires_at == previous_expiry
+            assert len(changes) == 1
+            assert changes[0]["room_id"] == room.id
+            assert changes[0]["event"] == "matchmaking.locked"
+            assert changes[0]["reason"] == "max_players_reached"
+            assert room.status == "in_progress"
+            assert room.matchmaking_fill_expires_at is None
 
     asyncio.run(_run())
 

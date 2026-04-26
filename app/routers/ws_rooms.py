@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import asyncio
 from uuid import UUID
 
 import redis.asyncio as redis
@@ -16,10 +17,61 @@ from app.core.security import decode_token
 from app.models import Room, User
 from app.schemas.ws import WSEvent
 from app.services.auth import AuthService
-from app.services.rooms import RoomGameError, RoomService
+from app.services.rooms import RECONNECT_WINDOW_TTL, RoomGameError, RoomService
 from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(tags=["ws"])
+
+_reconnect_timeout_tasks: dict[tuple[UUID, UUID], asyncio.Task] = {}
+
+
+def _cancel_reconnect_timeout_task(room_id: UUID, player_id: UUID) -> None:
+    """Cancel scheduled reconnect timeout task for a player if present."""
+    task = _reconnect_timeout_tasks.pop((room_id, player_id), None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
+async def _run_reconnect_timeout(room_id: UUID, player_id: UUID) -> None:
+    """Emit timeout removal event when reconnect window expires."""
+    try:
+        await asyncio.sleep(RECONNECT_WINDOW_TTL)
+        redis_client = redis.from_url(settings.REDIS_URL)
+        try:
+            still_disconnected = await RoomService.is_player_in_reconnect_window(
+                redis_client,
+                room_id,
+                player_id,
+            )
+            if not still_disconnected:
+                return
+
+            await RoomService.clear_reconnect_window(redis_client, room_id, player_id)
+            await connection_manager.broadcast_event(
+                room_id,
+                WSEvent(
+                    event="player.removed_timeout",
+                    room_id=room_id,
+                    payload={
+                        "player_id": str(player_id),
+                        "reason": "reconnect_timeout",
+                    },
+                ).model_dump(mode="json"),
+            )
+        finally:
+            await redis_client.aclose()
+    except asyncio.CancelledError:
+        return
+    finally:
+        _reconnect_timeout_tasks.pop((room_id, player_id), None)
+
+
+def _schedule_reconnect_timeout_task(room_id: UUID, player_id: UUID) -> None:
+    """Schedule reconnect timeout handling for a disconnected player."""
+    _cancel_reconnect_timeout_task(room_id, player_id)
+    _reconnect_timeout_tasks[(room_id, player_id)] = asyncio.create_task(
+        _run_reconnect_timeout(room_id, player_id)
+    )
 
 
 async def _send_error(websocket: WebSocket, room_id: UUID, code: str, message: str, details: dict | None = None):
@@ -150,8 +202,17 @@ async def _handle_start_game(
     correlation_id: UUID | None,
 ) -> None:
     """Handle host command to start a game from lobby state."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[START_GAME] Handling start_game for room {room_id}, room_kind={room.room_kind}, status={room.status}")
+    
+    # Check if we need to broadcast matchmaking.locked BEFORE status changes
+    should_broadcast_locked = room.room_kind == "random" and room.status == "matchmaking_lobby"
+    logger.info(f"[START_GAME] should_broadcast_locked={should_broadcast_locked}")
+    
     try:
         outcome = await RoomService.start_game(db, room, current_user_id, redis_client)
+        logger.info(f"[START_GAME] start_game returned outcome: {outcome}")
     except RoomGameError as exc:
         await _send_protocol_error(
             websocket,
@@ -165,7 +226,9 @@ async def _handle_start_game(
         return
 
     await db.commit()
+    logger.info(f"[START_GAME] After commit, room status={room.status}, room_kind={room.room_kind}")
 
+    logger.info(f"[START_GAME] Broadcasting game.started event")
     await connection_manager.broadcast_event(
         room_id,
         WSEvent(
@@ -183,7 +246,9 @@ async def _handle_start_game(
         ).model_dump(mode="json"),
     )
 
-    if room.room_kind == "random" and room.status == "matchmaking_lobby":
+    # Broadcast matchmaking.locked event if room is random lobby
+    if should_broadcast_locked:
+        logger.info(f"[START_GAME] Broadcasting matchmaking.locked")
         player_count = await RoomService._room_player_count(db, room_id)
         await connection_manager.broadcast_event(
             room_id,
@@ -196,6 +261,8 @@ async def _handle_start_game(
                 },
             ).model_dump(mode="json"),
         )
+    else:
+        logger.warning(f"[START_GAME] NOT broadcasting matchmaking.locked: room_kind={room.room_kind}, status={room.status}")
 
     await connection_manager.broadcast_event(
         room_id,
@@ -445,6 +512,23 @@ async def ws_room_channel(
             )
             await db.commit()
 
+            was_in_reconnect_window = await RoomService.is_player_in_reconnect_window(
+                redis_client,
+                room_id,
+                authenticated_user_id,
+            )
+            if was_in_reconnect_window:
+                _cancel_reconnect_timeout_task(room_id, authenticated_user_id)
+                await RoomService.clear_reconnect_window(redis_client, room_id, authenticated_user_id)
+                await connection_manager.broadcast_event(
+                    room_id,
+                    WSEvent(
+                        event="player.reconnected",
+                        room_id=room_id,
+                        payload={"player_id": str(authenticated_user_id)},
+                    ).model_dump(mode="json"),
+                )
+
         connected_event = WSEvent(
             event="room.connected",
             room_id=room_id,
@@ -596,7 +680,6 @@ async def ws_room_channel(
     except WebSocketDisconnect:
         pass
     finally:
-        await redis_client.aclose()
         if connected_user_id is not None:
             disconnected_user = connection_manager.disconnect(room_id, connected_user_id, websocket)
             if disconnected_user:
@@ -608,6 +691,18 @@ async def ws_room_channel(
                 await db.commit()
 
                 room_status = disconnect_outcome.get("room_status")
+                
+                reconnect_payload = await RoomService.start_reconnect_window(redis_client, room_id, connected_user_id)
+                _schedule_reconnect_timeout_task(room_id, connected_user_id)
+                await connection_manager.broadcast_event(
+                    room_id,
+                    WSEvent(
+                        event="player.reconnect_window_started",
+                        room_id=room_id,
+                        payload=reconnect_payload,
+                    ).model_dump(mode="json"),
+                )
+                
                 if room_status in ("lobby", "matchmaking_lobby"):
                     await connection_manager.broadcast_event(
                         room_id,
@@ -634,3 +729,5 @@ async def ws_room_channel(
                                 },
                             ).model_dump(mode="json"),
                         )
+
+        await redis_client.aclose()

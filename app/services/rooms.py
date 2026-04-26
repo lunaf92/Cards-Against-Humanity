@@ -18,6 +18,8 @@ from app.schemas.room import RoomConfigUpdateRequest, RoomCreateRequest, RoomJoi
 MATCHMAKING_QUEUE_KEY = "matchmaking:queue"
 GAME_WHITE_DECK_KEY = "game:{room_id}:white_deck"
 GAME_PLAYER_HAND_KEY = "game:{room_id}:hand:{user_id}"
+RECONNECT_WINDOW_KEY = "reconnect_window:{room_id}:{player_id}"
+RECONNECT_WINDOW_TTL = 60
 
 
 class RoomGameError(Exception):
@@ -350,12 +352,19 @@ class RoomService:
         return payload
 
     @staticmethod
+    @staticmethod
     async def start_game(db: AsyncSession, room: Room, current_user_id: UUID, redis_client) -> dict:
         """Validate lobby start and create the first round for the room."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[SERVICE] start_game: room_id={room.id}, current_status={room.status}, host_id={room.host_id}, current_user_id={current_user_id}")
+        
         if room.host_id != current_user_id:
+            logger.error(f"[SERVICE] Host check failed")
             raise RoomGameError("NOT_HOST", "Only host can start the game", {"event": "lobby.start_game"})
 
         if room.status not in ("lobby", "matchmaking_lobby"):
+            logger.error(f"[SERVICE] Room status check failed: {room.status}")
             raise RoomGameError(
                 "STATE_CONFLICT",
                 "Room is not in a startable state",
@@ -364,12 +373,14 @@ class RoomService:
 
         players_count = await RoomService._room_player_count(db, room.id)
         if players_count < 3:
+            logger.error(f"[SERVICE] Not enough players: {players_count}")
             raise RoomGameError(
                 "STATE_CONFLICT",
                 "Need at least 3 players to start game",
                 {"player_count": players_count},
             )
 
+        logger.warning(f"[SERVICE] All checks passed, updating room status to in_progress")
         max_round_result = await db.execute(
             select(func.max(GameRound.round_number)).where(GameRound.room_id == room.id)
         )
@@ -378,9 +389,11 @@ class RoomService:
         czar_id = await RoomService._next_czar_id(db, room.id)
 
         room.status = "in_progress"
+        logger.warning(f"[SERVICE] Room status set to in_progress, calling _create_round and _deal_initial_hands")
         round_obj, black_card = await RoomService._create_round(db, room, next_round_number, czar_id)
         players = await RoomService.list_room_players(db, room.id)
         hands = await RoomService._deal_initial_hands(db, redis_client, room)
+        logger.warning(f"[SERVICE] start_game completed successfully")
 
         return {
             "round": round_obj,
@@ -878,7 +891,7 @@ class RoomService:
         queued_users = await redis_client.zrange(MATCHMAKING_QUEUE_KEY, 0, 2)
         queued_user_ids = [UUID(value.decode() if isinstance(value, bytes) else value) for value in queued_users]
         if len(queued_user_ids) < 3:
-            return queue_size, None
+            return queue_size, None, False
 
         for member in queued_user_ids:
             await redis_client.zrem(MATCHMAKING_QUEUE_KEY, str(member))
@@ -1066,3 +1079,31 @@ class RoomService:
             await db.flush()
 
         return changes
+
+    @staticmethod
+    async def start_reconnect_window(redis_client, room_id: UUID, player_id: UUID) -> dict:
+        """Start a 60-second reconnect window for a disconnected player. Return event payload."""
+        key = RECONNECT_WINDOW_KEY.format(room_id=room_id, player_id=player_id)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        expires_at = now + timedelta(seconds=RECONNECT_WINDOW_TTL)
+        
+        await redis_client.setex(key, RECONNECT_WINDOW_TTL, "1")
+        
+        return {
+            "player_id": str(player_id),
+            "expires_at": expires_at,
+            "seconds_remaining": RECONNECT_WINDOW_TTL,
+        }
+
+    @staticmethod
+    async def is_player_in_reconnect_window(redis_client, room_id: UUID, player_id: UUID) -> bool:
+        """Check if player is within reconnect window."""
+        key = RECONNECT_WINDOW_KEY.format(room_id=room_id, player_id=player_id)
+        exists = await redis_client.exists(key)
+        return bool(exists)
+
+    @staticmethod
+    async def clear_reconnect_window(redis_client, room_id: UUID, player_id: UUID) -> None:
+        """Clear reconnect window for a player."""
+        key = RECONNECT_WINDOW_KEY.format(room_id=room_id, player_id=player_id)
+        await redis_client.delete(key)

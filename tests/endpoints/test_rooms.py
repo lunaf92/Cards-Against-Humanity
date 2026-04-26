@@ -293,7 +293,8 @@ def test_matchmaking_worker_tick_starts_and_cancels_countdown(test_db):
             await session.flush()
 
             updated = await RoomService.process_matchmaking_tick(session)
-            assert updated == 1
+            assert len(updated) == 1
+            assert updated[0]["event"] == "matchmaking.countdown_started"
             assert room.matchmaking_fill_expires_at is not None
 
             # Drop to 2 players and ensure countdown is canceled.
@@ -308,7 +309,8 @@ def test_matchmaking_worker_tick_starts_and_cancels_countdown(test_db):
             await session.flush()
 
             updated = await RoomService.process_matchmaking_tick(session)
-            assert updated == 1
+            assert len(updated) == 1
+            assert updated[0]["event"] == "matchmaking.countdown_canceled"
             assert room.matchmaking_fill_expires_at is None
 
     asyncio.run(_assert_tick_behavior())

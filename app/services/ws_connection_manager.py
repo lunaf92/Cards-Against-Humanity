@@ -59,7 +59,13 @@ class RoomConnectionManager:
 
     async def broadcast_event(self, room_id: UUID, payload: dict) -> None:
         """Broadcast event payload to all connected users in room."""
+        import logging
+        logger = logging.getLogger(__name__)
+        event_name = payload.get("event", "unknown")
+        logger.warning(f"[BROADCAST] Broadcasting event '{event_name}' to room {room_id}")
         room_connections = self._rooms.get(room_id, {})
+        connection_count = sum(len(conns) for conns in room_connections.values())
+        logger.warning(f"[BROADCAST] Sending to {connection_count} connected websockets in room {room_id}")
         for user_connections in room_connections.values():
             for websocket in user_connections:
                 await websocket.send_json(payload)
