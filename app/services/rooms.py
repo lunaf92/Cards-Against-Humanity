@@ -286,17 +286,15 @@ class RoomService:
                 Room.matchmaking_fill_expires_at > now,
             )
             .order_by(Room.matchmaking_fill_expires_at.asc())
-            .limit(1)
         )
-        room = result.scalar_one_or_none()
-        if room is None:
-            return None
+        rooms = result.scalars().all()
 
-        players = await RoomService._room_player_count(db, room.id)
-        if players >= room.max_players:
-            return None
+        for room in rooms:
+            players = await RoomService._room_player_count(db, room.id)
+            if players < room.max_players:
+                return room
 
-        return room
+        return None
 
     @staticmethod
     async def _add_player_to_room(db: AsyncSession, room: Room, user_id: UUID) -> None:
