@@ -13,7 +13,8 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    username = Column(String(255), unique=True, nullable=False, index=True)
+    # Length must match migration 001 (users.username is String(50) in the DB).
+    username = Column(String(50), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=False)
     auth_provider = Column(String(50), nullable=True)

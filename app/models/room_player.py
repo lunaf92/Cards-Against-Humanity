@@ -1,5 +1,5 @@
 """RoomPlayer model for tracking players in rooms."""
-from sqlalchemy import Column, Integer, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from datetime import datetime
 import uuid
@@ -10,6 +10,9 @@ from app.models.base import Base
 class RoomPlayer(Base):
     """Track players in a room and their state."""
     __tablename__ = "room_players"
+    __table_args__ = (
+        UniqueConstraint("room_id", "player_id", name="uq_room_players_room_player"),
+    )
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     room_id = Column(PG_UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=False)

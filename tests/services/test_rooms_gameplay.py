@@ -16,7 +16,7 @@ class _FakeRedisClient:
     async def get(self, key: str):
         return self._values.get(key)
 
-    async def set(self, key: str, value: str):
+    async def set(self, key: str, value: str, ex: int | None = None):
         self._values[key] = value
 
     async def delete(self, *keys: str):

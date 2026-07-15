@@ -1,15 +1,22 @@
 """User schemas for request/response validation."""
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
 from datetime import datetime
 from typing import Optional
 
+# Username must fit the DB column (String(50)); password capped at 72 to stay
+# within bcrypt's effective input limit.
+USERNAME_MIN_LENGTH = 3
+USERNAME_MAX_LENGTH = 50
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 72
+
 
 class UserCreate(BaseModel):
     """User registration request."""
-    username: str
+    username: str = Field(min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH)
     email: Optional[EmailStr] = None
-    password: str
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
 
     class Config:
         json_schema_extra = {
@@ -23,9 +30,13 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     """User profile update request."""
-    username: Optional[str] = None
+    username: Optional[str] = Field(
+        default=None, min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH
+    )
     email: Optional[EmailStr] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(
+        default=None, min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
 
     class Config:
         json_schema_extra = {

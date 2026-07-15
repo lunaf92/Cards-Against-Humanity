@@ -1,7 +1,12 @@
 """Authentication endpoints."""
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
+from app.core.dependencies import security
 from app.core.security import decode_token
 from app.services.auth import AuthService
 from app.schemas.auth import LoginRequest, TokenPair, RefreshTokenRequest, TokenResponse
@@ -39,11 +44,18 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
                 detail="Email already registered",
             )
 
-    # Register user
-    user = await AuthService.register_user(
-        db, user_data.username, user_data.email or "", user_data.password
-    )
-    await db.commit()
+    # Register user; unique constraints are the authority under concurrent requests
+    try:
+        user = await AuthService.register_user(
+            db, user_data.username, user_data.email or "", user_data.password
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username or email already registered",
+        )
 
     # Create tokens
     tokens = await AuthService.create_tokens(user.id)
@@ -99,6 +111,13 @@ async def refresh_token(
             detail="Invalid refresh token",
         )
 
+    # Reject access tokens presented as refresh tokens.
+    if payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(
@@ -125,25 +144,11 @@ async def refresh_token(
     summary="Logout user",
 )
 async def logout(
-    authorization: str = None,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke user tokens server-side."""
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authorization header",
-        )
-
-    # Extract token from Bearer scheme
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header",
-        )
-
-    token = parts[1]
+    """Revoke the presented token's JTI server-side (covers its paired token too)."""
+    token = credentials.credentials
     payload = decode_token(token)
     if not payload:
         raise HTTPException(
@@ -152,12 +157,14 @@ async def logout(
         )
 
     user_id = payload.get("sub")
-    if not user_id:
+    try:
+        user_uuid = UUID(user_id)
+    except (TypeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload",
         )
 
-    await AuthService.revoke_token(db, user_id, token)
+    await AuthService.revoke_token(db, user_uuid, token)
     await db.commit()
     return None

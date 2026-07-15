@@ -4,6 +4,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import app.core.database as database_module
 from app.main import app
 from app.core.database import get_db
 from app.models import Card, GameRound, Room, RoomPlayer, Submission, TokenRevocation, User
@@ -39,8 +40,14 @@ async def test_db():
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # WebSocket handlers and background timers open sessions straight from the
+    # module-level factory, so point it at the test database too.
+    original_session_factory = database_module.async_session
+    database_module.async_session = async_session
+
     yield async_session
 
+    database_module.async_session = original_session_factory
     app.dependency_overrides.clear()
     await engine.dispose()
 

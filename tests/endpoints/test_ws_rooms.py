@@ -57,7 +57,7 @@ class _FakeRedisClient:
             return 1
         return 0
 
-    async def set(self, key: str, value: str):
+    async def set(self, key: str, value: str, ex: int | None = None):
         self._data[key] = value
 
     async def get(self, key: str) -> str | None:
@@ -569,8 +569,16 @@ def test_ws_game_commands_reject_when_game_not_started(client):
         assert pick_error["payload"]["code"] == "GAME_NOT_STARTED"
 
 
-def test_ws_submit_cards_happy_path_transitions_room_to_judging(client, test_db):
+def _disable_wallclock_timers(monkeypatch):
+    """Disable round/judging wall-clock timers so slow runs (e.g. under coverage)
+    cannot trigger auto-submit mid-test. Timer behavior gets dedicated tests."""
+    monkeypatch.setattr(ws_rooms_router, "_schedule_round_timer_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ws_rooms_router, "_schedule_judging_timer_task", lambda *args, **kwargs: None)
+
+
+def test_ws_submit_cards_happy_path_transitions_room_to_judging(client, test_db, monkeypatch):
     """Two player submissions move the room from waiting to judging."""
+    _disable_wallclock_timers(monkeypatch)
     white_cards = _seed_cards(
         test_db,
         black_cards=[("Prompt _", 1)],
@@ -634,8 +642,9 @@ def test_ws_submit_cards_happy_path_transitions_room_to_judging(client, test_db)
         assert flattened == {white_cards[guest_one_hand[0]], white_cards[guest_two_hand[0]]}
 
 
-def test_ws_pick_winner_happy_path_starts_next_round(client, test_db):
+def test_ws_pick_winner_happy_path_starts_next_round(client, test_db, monkeypatch):
     """Winner selection updates scores and automatically starts the next round."""
+    _disable_wallclock_timers(monkeypatch)
     white_cards = _seed_cards(
         test_db,
         black_cards=[("Prompt _", 1), ("Another prompt _", 1)],
@@ -716,7 +725,10 @@ def test_ws_pick_winner_happy_path_starts_next_round(client, test_db):
         next_round = next_round_events[0]["payload"]
         assert next_round["round_number"] == 2
         assert next_round["czar_id"] != first_round["czar_id"]
-        assert next_round["black_card"]["text"] == "Another prompt _"
+        # Black cards are drawn from a shuffled per-room deck, so round order is
+        # random — but the second round must use the other seeded card.
+        assert next_round["black_card"]["text"] in {"Prompt _", "Another prompt _"}
+        assert next_round["black_card"]["text"] != first_round["black_card"]["text"]
 
 
 def test_ws_reconnect_timeout_task_emits_removed_timeout(monkeypatch):

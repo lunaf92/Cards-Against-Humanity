@@ -137,6 +137,54 @@ def test_refresh_token(client):
     assert "access_token" in data
 
 
+def test_refresh_rejects_access_token(client):
+    """Access tokens must not be accepted by the refresh endpoint."""
+    register_payload = {
+        "username": "refresh_misuse_user",
+        "password": "securepass123"
+    }
+    register_response = client.post("/auth/register", json=register_payload)
+    access_token = register_response.json()["access_token"]
+
+    response = client.post("/auth/refresh", json={"refresh_token": access_token})
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_logout_with_bearer_header_revokes_token(client):
+    """Logout accepts a standard Authorization header and revokes the token."""
+    register_payload = {
+        "username": "logout_user",
+        "password": "securepass123"
+    }
+    register_response = client.post("/auth/register", json=register_payload)
+    access_token = register_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    me_before = client.get("/users/me", headers=headers)
+    assert me_before.status_code == status.HTTP_200_OK
+
+    logout_response = client.post("/auth/logout", headers=headers)
+    assert logout_response.status_code == status.HTTP_204_NO_CONTENT
+
+    me_after = client.get("/users/me", headers=headers)
+    assert me_after.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_register_rejects_weak_password_and_short_username(client):
+    """Registration enforces minimum password and username lengths."""
+    response = client.post(
+        "/auth/register",
+        json={"username": "validname", "password": "short"},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    response = client.post(
+        "/auth/register",
+        json={"username": "ab", "password": "securepass123"},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 def test_root_endpoint(client):
     """Test root endpoint."""
     response = client.get("/")

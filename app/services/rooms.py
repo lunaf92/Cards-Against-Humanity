@@ -17,9 +17,12 @@ from app.schemas.room import RoomConfigUpdateRequest, RoomCreateRequest, RoomJoi
 
 MATCHMAKING_QUEUE_KEY = "matchmaking:queue"
 GAME_WHITE_DECK_KEY = "game:{room_id}:white_deck"
+GAME_BLACK_DECK_KEY = "game:{room_id}:black_deck"
 GAME_PLAYER_HAND_KEY = "game:{room_id}:hand:{user_id}"
 RECONNECT_WINDOW_KEY = "reconnect_window:{room_id}:{player_id}"
 RECONNECT_WINDOW_TTL = 60
+# Safety-net expiry so abandoned games cannot leak Redis keys forever.
+GAME_STATE_TTL_SECONDS = 24 * 60 * 60
 
 
 class RoomGameError(Exception):
@@ -81,6 +84,11 @@ class RoomService:
         return GAME_WHITE_DECK_KEY.format(room_id=room_id)
 
     @staticmethod
+    def _black_deck_key(room_id: UUID) -> str:
+        """Build Redis key for room black deck state."""
+        return GAME_BLACK_DECK_KEY.format(room_id=room_id)
+
+    @staticmethod
     def _player_hand_key(room_id: UUID, user_id: UUID) -> str:
         """Build Redis key for a player's private hand state."""
         return GAME_PLAYER_HAND_KEY.format(room_id=room_id, user_id=user_id)
@@ -99,7 +107,11 @@ class RoomService:
     @staticmethod
     async def _redis_json_set(redis_client, key: str, values: list[UUID]) -> None:
         """Persist UUID list into Redis as JSON array of strings."""
-        await redis_client.set(key, json.dumps([str(item) for item in values]))
+        await redis_client.set(
+            key,
+            json.dumps([str(item) for item in values]),
+            ex=GAME_STATE_TTL_SECONDS,
+        )
 
     @staticmethod
     async def get_white_deck(redis_client, room_id: UUID) -> list[UUID]:
@@ -216,15 +228,26 @@ class RoomService:
         return hands_by_player
 
     @staticmethod
-    async def _pick_black_card_for_round(db: AsyncSession, round_number: int) -> Card:
-        """Pick a deterministic black card for a round from the current card pool."""
-        result = await db.execute(
-            select(Card).where(Card.type == "black").order_by(Card.created_at.asc(), Card.id.asc())
-        )
-        black_cards = result.scalars().all()
-        if not black_cards:
-            raise RoomGameError("STATE_CONFLICT", "No black cards available", {"event": "round.start"})
-        return black_cards[(round_number - 1) % len(black_cards)]
+    async def _draw_black_card(db: AsyncSession, redis_client, room_id: UUID) -> Card:
+        """Draw the next black card from the room's shuffled Redis deck, reshuffling when empty."""
+        key = RoomService._black_deck_key(room_id)
+        deck = await RoomService._redis_json_get(redis_client, key)
+        while True:
+            if not deck:
+                result = await db.execute(select(Card.id).where(Card.type == "black"))
+                deck = [card_id for (card_id,) in result.all()]
+                if not deck:
+                    raise RoomGameError(
+                        "STATE_CONFLICT", "No black cards available", {"event": "round.start"}
+                    )
+                random.shuffle(deck)
+
+            card_id = deck.pop(0)
+            card = await db.get(Card, card_id)
+            # Skip ids whose card was deleted since the deck was persisted.
+            if card is not None and card.type == "black":
+                await RoomService._redis_json_set(redis_client, key, deck)
+                return card
 
     @staticmethod
     async def _next_czar_id(db: AsyncSession, room_id: UUID, current_czar_id: UUID | None = None) -> UUID:
@@ -245,12 +268,13 @@ class RoomService:
     @staticmethod
     async def _create_round(
         db: AsyncSession,
+        redis_client,
         room: Room,
         round_number: int,
         czar_id: UUID,
     ) -> tuple[GameRound, Card]:
-        """Create a new waiting round with rotated czar and chosen black card."""
-        black_card = await RoomService._pick_black_card_for_round(db, round_number)
+        """Create a new waiting round with rotated czar and drawn black card."""
+        black_card = await RoomService._draw_black_card(db, redis_client, room.id)
         round_obj = GameRound(
             room_id=room.id,
             round_number=round_number,
@@ -352,19 +376,12 @@ class RoomService:
         return payload
 
     @staticmethod
-    @staticmethod
     async def start_game(db: AsyncSession, room: Room, current_user_id: UUID, redis_client) -> dict:
         """Validate lobby start and create the first round for the room."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"[SERVICE] start_game: room_id={room.id}, current_status={room.status}, host_id={room.host_id}, current_user_id={current_user_id}")
-        
         if room.host_id != current_user_id:
-            logger.error(f"[SERVICE] Host check failed")
             raise RoomGameError("NOT_HOST", "Only host can start the game", {"event": "lobby.start_game"})
 
         if room.status not in ("lobby", "matchmaking_lobby"):
-            logger.error(f"[SERVICE] Room status check failed: {room.status}")
             raise RoomGameError(
                 "STATE_CONFLICT",
                 "Room is not in a startable state",
@@ -373,14 +390,12 @@ class RoomService:
 
         players_count = await RoomService._room_player_count(db, room.id)
         if players_count < 3:
-            logger.error(f"[SERVICE] Not enough players: {players_count}")
             raise RoomGameError(
                 "STATE_CONFLICT",
                 "Need at least 3 players to start game",
                 {"player_count": players_count},
             )
 
-        logger.warning(f"[SERVICE] All checks passed, updating room status to in_progress")
         max_round_result = await db.execute(
             select(func.max(GameRound.round_number)).where(GameRound.room_id == room.id)
         )
@@ -389,11 +404,13 @@ class RoomService:
         czar_id = await RoomService._next_czar_id(db, room.id)
 
         room.status = "in_progress"
-        logger.warning(f"[SERVICE] Room status set to in_progress, calling _create_round and _deal_initial_hands")
-        round_obj, black_card = await RoomService._create_round(db, room, next_round_number, czar_id)
+        # Drop any stale deck so each game starts from a fresh shuffle.
+        await redis_client.delete(RoomService._black_deck_key(room.id))
+        round_obj, black_card = await RoomService._create_round(
+            db, redis_client, room, next_round_number, czar_id
+        )
         players = await RoomService.list_room_players(db, room.id)
         hands = await RoomService._deal_initial_hands(db, redis_client, room)
-        logger.warning(f"[SERVICE] start_game completed successfully")
 
         return {
             "round": round_obj,
@@ -569,6 +586,11 @@ class RoomService:
 
         if game_winner is not None:
             room.status = "finished"
+            await RoomService.cleanup_game_state(
+                redis_client,
+                room.id,
+                [player.player_id for player in scoreboard],
+            )
             return {
                 "winner_submission": winner_submission,
                 "scoreboard": scoreboard,
@@ -586,6 +608,7 @@ class RoomService:
         )
         next_round, next_black_card = await RoomService._create_round(
             db,
+            redis_client,
             room,
             next_round_number,
             next_czar_id,
@@ -598,6 +621,17 @@ class RoomService:
             "next_black_card": next_black_card,
             "hands": refilled_hands,
         }
+
+    @staticmethod
+    async def cleanup_game_state(redis_client, room_id: UUID, player_ids: list[UUID]) -> None:
+        """Delete per-room Redis game state once a game ends."""
+        keys = [
+            RoomService._white_deck_key(room_id),
+            RoomService._black_deck_key(room_id),
+            *(RoomService._player_hand_key(room_id, player_id) for player_id in player_ids),
+        ]
+        for key in keys:
+            await redis_client.delete(key)
 
     @staticmethod
     async def create_private_room(
@@ -849,6 +883,10 @@ class RoomService:
             return result
         result["round_timer_seconds"] = room.round_timer_seconds
 
+        # Nothing to enforce once the game is over; keep the roster intact for results.
+        if room.status == "finished":
+            return result
+
         # Remove player membership and hand state.
         await db.execute(
             RoomPlayer.__table__.delete().where(
@@ -904,6 +942,7 @@ class RoomService:
         next_czar_id = await RoomService._next_czar_id(db, room_id, current_round.czar_id)
         next_round, next_black_card = await RoomService._create_round(
             db,
+            redis_client,
             room,
             current_round.round_number + 1,
             next_czar_id,

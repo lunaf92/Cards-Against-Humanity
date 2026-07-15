@@ -46,6 +46,9 @@ services:
         condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
+      # Fast coverage tracer (sys.monitoring); without it, coverage slows tests ~10x
+      # and real 90s round timers start firing in the middle of gameplay tests.
+      - COVERAGE_CORE=sysmon
 
   worker:
     build: .

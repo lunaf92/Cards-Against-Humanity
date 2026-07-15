@@ -1,6 +1,7 @@
 """User profile endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -50,6 +51,13 @@ async def update_me(
     if payload.password:
         current_user.password_hash = hash_password(payload.password)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username or email already registered",
+        )
     await db.refresh(current_user)
     return UserResponse.model_validate(current_user)
