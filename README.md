@@ -74,15 +74,15 @@ docker compose run --rm backend pytest tests/ -v
 # 3. Check health
 curl http://localhost:8000/health
 
-# 4. Register a user
+# 4. Register a user (password must be at least 8 characters)
 curl -X POST http://localhost:8000/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"username":"testplayer","email":"test@example.com","password":"pass123"}'
+  -d '{"username":"testplayer","email":"test@example.com","password":"securepass123"}'
 
 # 5. Get access token and test protected route
 ACCESS_TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username_or_email":"testplayer","password":"pass123"}' | jq -r '.access_token')
+  -d '{"username_or_email":"testplayer","password":"securepass123"}' | jq -r '.access_token')
 
 curl -X GET http://localhost:8000/users/me \
   -H "Authorization: Bearer $ACCESS_TOKEN"
