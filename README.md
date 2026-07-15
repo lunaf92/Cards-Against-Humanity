@@ -2,11 +2,15 @@
 
 Cross-platform multiplayer card game backend built with FastAPI, PostgreSQL, and Redis.
 
+The backend (Phases 1–3) is complete: auth, cards, rooms, random matchmaking, and the
+real-time WebSocket game engine. Next up is the frontend (Expo / React Native) — see
+[docs/DEVELOPMENT_STRATEGY.md](docs/DEVELOPMENT_STRATEGY.md) for the roadmap.
+
 ## Tech Stack
 
 - **Backend**: FastAPI (Python 3.13)
-- **Database**: PostgreSQL (async via SQLAlchemy)
-- **Cache/Game State**: Redis
+- **Database**: PostgreSQL (async via SQLAlchemy, Alembic migrations)
+- **Cache/Game State**: Redis (decks, hands, matchmaking queue, pub/sub)
 - **Containerization**: Docker + Docker Compose
 - **Dependency Manager**: Poetry
 
@@ -17,26 +21,32 @@ app/
 ├── core/              # Config, database, security, dependencies
 ├── models/            # SQLAlchemy ORM models
 ├── schemas/           # Pydantic request/response models
-├── services/          # Business logic
-├── routers/           # API endpoints
+├── services/          # Business logic (rooms/game engine, auth, ws manager)
+├── routers/           # REST endpoints + WebSocket room channel
+├── workers/           # Matchmaking countdown worker
 └── main.py            # FastAPI app entrypoint
 
-scripts/               # Database seeding, migrations
-tests/                 # Test suite
+alembic/               # Database migrations
+scripts/               # Database seeding
+tests/                 # Test suite (endpoints, services, websocket)
+docs/                  # Plans, protocol specs, developer guide
 .envs/                 # Environment configuration files
 ```
 
-## Phase 1: Backend Foundation ✓
+## Features
 
-Completed:
-- ✓ FastAPI app with async SQLAlchemy ORM
-- ✓ PostgreSQL and Redis integration
-- ✓ JWT authentication with server-side token revocation
-- ✓ Auth endpoints: register, login, refresh, logout
-- ✓ Health check endpoint
-- ✓ Docker + Docker Compose setup
-- ✓ Placeholder card deck seeder
-- ✓ Basic auth and health tests
+- JWT auth (access + refresh with type claims, server-side revocation on logout)
+- Default and custom cards (custom card pools are not yet used in games)
+- Private rooms with 6-char code + password, host-only config
+- Random matchmaking queue with fill countdown (background worker)
+- Real-time gameplay over WebSockets: rounds, submissions, judging, scoring,
+  round/judging timers with auto-submit and auto-pick, reconnect windows
+- WebSocket protocol reference: [docs/PHASE_3_WEBSOCKET_PROTOCOL.md](docs/PHASE_3_WEBSOCKET_PROTOCOL.md)
+  and [docs/guide/14-realtime-protocol-quick-reference.md](docs/guide/14-realtime-protocol-quick-reference.md)
+
+> **Deployment note**: run exactly **one** backend process. Round/reconnect timers
+> and socket presence are process-local; multiple workers or replicas will
+> misbehave. See [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) §1.
 
 ## Getting Started
 
@@ -52,7 +62,8 @@ docker compose up --build
 ```
 
 This starts:
-- `backend` on `http://localhost:8000`
+- `backend` on `http://localhost:8000` (runs migrations on startup)
+- `worker` (matchmaking countdown)
 - `postgres` on `localhost:5432`
 - `redis` on `localhost:6379`
 
@@ -60,12 +71,10 @@ This starts:
 
 Open browser to `http://localhost:8000/docs` for interactive Swagger UI.
 
-### Phase 1 Verification
-
-Run all Phase 1 verification steps:
+### Quick Verification
 
 ```bash
-# 1. Initialize database and seed cards
+# 1. Seed the default card deck
 docker compose run --rm backend python scripts/seed_cards.py
 
 # 2. Run tests
@@ -88,7 +97,7 @@ curl -X GET http://localhost:8000/users/me \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
-### Development Workflow
+## Development Workflow
 
 #### Run app
 ```bash
@@ -100,39 +109,51 @@ docker compose up
 docker compose run --rm backend pytest tests/ -v --cov=app
 ```
 
-#### Lint code
+Notes:
+- WebSocket tests need the `redis` service running (compose handles this).
+- Coverage uses the fast `sys.monitoring` tracer via `COVERAGE_CORE=sysmon`
+  (set in docker-compose); without it the suite is ~10x slower.
+
+#### Migrations
 ```bash
-docker compose run --rm backend ruff check app/
+docker compose run --rm backend alembic upgrade head
+docker compose run --rm backend alembic revision -m "description"
 ```
 
-#### Format code
+#### Lint / format
 ```bash
+docker compose run --rm backend ruff check app/
 docker compose run --rm backend black app/ tests/
 ```
 
-#### View logs
+#### Logs / stop
 ```bash
 docker compose logs -f backend
-```
-
-#### Stop everything
-```bash
 docker compose down
 ```
 
 ## Environment Variables
 
-Configuration is loaded from `.envs/.env.dev` by default. For production, use `.envs/.env.prod`.
+Configuration is loaded from `.envs/.env.dev` by default (see
+[docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) §6 before any production deployment).
 
 Key variables:
 - `DATABASE_URL`: PostgreSQL connection string
 - `REDIS_URL`: Redis connection string
 - `JWT_SECRET_KEY`: Secret for signing tokens (change in production!)
-- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL (default 24h)
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL (default 24h; lower for production)
 - `JWT_REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token TTL (default 30d)
+- `CORS_ORIGINS`: JSON list of allowed origins
 
-## Next: Phase 2
+## Documentation
 
-Phase 2 implements full REST API for cards and rooms management.
+- [docs/plan.md](docs/plan.md) — phased implementation plan (Phases 4–7 = frontend)
+- [docs/DEVELOPMENT_STRATEGY.md](docs/DEVELOPMENT_STRATEGY.md) — what to build/fix at which milestone
+- [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) — known risks and technical debt
+- [docs/guide/](docs/guide/README.md) — full developer guide (architecture, protocol, onboarding)
+- [docs/requirements.md](docs/requirements.md) — functional requirements
 
-See [plan.md](plan.md) for detailed Phase 2 roadmap.
+## Next: Frontend (Phase 4+)
+
+Expo / React Native app consuming this API. Start with auth + API client
+(plan.md Phase 4), then lobby/matchmaking (Phase 5), then gameplay (Phase 6).
