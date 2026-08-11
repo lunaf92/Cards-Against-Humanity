@@ -24,7 +24,7 @@ Backend services (FastAPI, PostgreSQL, Redis) are fully operational and tested. 
 ├── tests/               # Backend test suite (pytest, Docker-executed)
 ├── alembic/             # DB migrations
 ├── scripts/             # Seed and utility scripts
-├── docs/                # Phase documentation
+├── docs/                # Developer guide, protocol reference, roadmap, known risks
 ├── .envs/               # Environment files for compose services
 ├── frontend/            # Expo/React Native app (Phase 4+, not yet created)
 └── docker-compose.yml
@@ -118,19 +118,20 @@ If a needed Docker command is missing, add it to project docs/scripts before con
   - status codes
   - validation constraints
   - examples when behavior is not obvious
-- Keep `docs/plan.md` aligned with delivered behavior.
-- WebSocket event contracts (event names, payload shapes) are documented in `docs/PHASE_3_FINAL.md` and are stable. Do not change event names without updating that document and all frontend consumers.
+- Keep `docs/implementation-plan.md` aligned with delivered behavior.
+- WebSocket event contracts (event names, payload shapes) are documented in `docs/websocket-protocol.md` and `docs/guide/14-realtime-protocol-quick-reference.md`, and are stable. Do not change event names without updating those documents and all frontend consumers.
 
 ## Phase-Close Documentation Protocol
 
 - At the end of every completed phase, update `AGENT.md` with any new execution standards, constraints, and quality gates introduced during that phase.
-- At the end of every completed phase, create or update phase documentation under `docs/` with:
-  - what was implemented
-  - architecture and flow explanation for non-boilerplate code
-  - file and line references for key logic paths
-  - behavior notes, edge cases, and known limitations
+- **Do not create new freestanding `docs/PHASE_N.md`-style files.** That pattern rotted in practice — three of them (covering Phases 1–3) went stale and were deleted once the developer guide superseded them. Route what would have gone into one of those into the existing structure instead:
+  - What was implemented, architecture/flow explanations, and file/line references for key logic paths → the relevant chapter under `docs/guide/`. Only add a new chapter if the change doesn't fit any existing one — if you do, update `docs/guide/README.md` and `docs/guide/TOC.md` to index it.
+  - Notable design decisions and their tradeoffs → `docs/guide/13-architecture-decision-log.md`.
+  - Newly discovered risks, deferred work, or known limitations → `docs/known-risks-and-technical-debt.md`.
+  - Protocol/contract changes (WebSocket events, REST payloads) → `docs/websocket-protocol.md` and `docs/guide/14-realtime-protocol-quick-reference.md`.
+  - Changes to what's next or milestone sequencing → `docs/development-roadmap.md` and `docs/implementation-plan.md`.
 - For non-boilerplate code, include implementation-focused explanations similar in depth to the auth/revocation documentation style already used in `docs/`.
-- Keep phase docs actionable: include verification steps and expected outcomes.
+- Keep these updates actionable: include verification steps and expected outcomes, same bar a standalone phase doc would have had.
 
 ## Code Comment Policy
 
@@ -147,7 +148,7 @@ A task is complete only when all are true:
 3. Regression risk is covered by tests.
 4. Swagger/OpenAPI docs are accurate (for backend changes).
 5. Project docs are updated for non-trivial changes.
-6. Phase-close docs in `docs/` are updated when a phase is completed.
+6. When a phase is completed, its documentation is folded into the existing `docs/` structure per the Phase-Close Documentation Protocol above — not written as a new freestanding file.
 
 ## PR Checklist
 
@@ -157,5 +158,5 @@ A task is complete only when all are true:
 - [ ] Backward compatibility reviewed
 - [ ] Swagger/OpenAPI updated (backend)
 - [ ] Non-trivial functions include one-line intent comments
-- [ ] `docs/plan.md` updated if scope changed
-- [ ] `docs/` phase documentation updated for non-boilerplate implementations
+- [ ] `docs/implementation-plan.md` updated if scope changed
+- [ ] Non-boilerplate implementations documented in the relevant existing `docs/` file (guide chapter, ADR log, protocol reference, or known-risks doc) — no new freestanding `docs/PHASE_N.md`-style file

@@ -97,7 +97,7 @@ Read:
 1. [../../app/routers/ws_rooms.py](../../app/routers/ws_rooms.py)
 2. [../../app/services/ws_connection_manager.py](../../app/services/ws_connection_manager.py)
 3. [../../app/schemas/ws.py](../../app/schemas/ws.py)
-4. [../PHASE_3_WEBSOCKET_PROTOCOL.md](../PHASE_3_WEBSOCKET_PROTOCOL.md)
+4. [../websocket-protocol.md](../websocket-protocol.md)
 
 Focus areas:
 

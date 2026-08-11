@@ -14,7 +14,7 @@ Use this skill whenever a change affects SQLAlchemy models, database schema, def
 - Database schema is managed by Alembic, not by `Base.metadata.create_all()`.
 - Do not reintroduce automatic table creation at application startup.
 - Treat database data as the source of truth. Schema evolution must preserve existing data unless an intentional destructive migration is approved.
-- Backend startup in Docker Compose runs `alembic upgrade head`, but migrations still need to be authored explicitly.
+- Docker Compose runs `alembic upgrade head` once via the one-shot `migrate` service on every `docker compose up`; `backend` and `worker` wait for it to complete successfully before starting. Migrations still need to be authored explicitly — `migrate` only applies what already exists in `alembic/versions/`.
 
 ## Standard Workflow
 

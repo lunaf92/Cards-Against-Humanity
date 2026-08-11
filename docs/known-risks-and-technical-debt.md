@@ -9,7 +9,7 @@ mitigated) and should be revisited — roughly ordered by how likely they are to
 bite.
 
 **When to fix each of these** is covered separately in
-[DEVELOPMENT_STRATEGY.md](DEVELOPMENT_STRATEGY.md), which maps every item here
+[development-roadmap.md](development-roadmap.md), which maps every item here
 to the development milestone where it becomes blocking.
 
 ---
@@ -153,6 +153,21 @@ the room row in WebSocket game commands close the worst holes, but these remain:
 - `test_ws_reconnect_timeout_task_emits_removed_timeout` talks to the real dev
   Postgres (it bypasses the `test_db` fixture), so it silently depends on the
   dev DB schema existing.
+- **The rest of the suite can't catch model/migration drift.** `test_db` (see
+  `tests/conftest.py`) builds its schema via `Base.metadata.create_all(...)`
+  straight from the ORM models — it never runs Alembic at all. A column
+  declared on a model but missing from a migration passes every test in this
+  file silently and only breaks against a real, migrated Postgres. This is
+  exactly what happened with `GameRound.created_at` and `Submission.created_at`
+  (migration 001 never created them; fixed in migration 005) — every test was
+  green the whole time. `tests/test_schema_drift.py` is the regression guard:
+  it diffs the live, migrated `postgres` service's schema against `Base.metadata`
+  via `alembic.autogenerate.compare_metadata`, and only runs when a real
+  Postgres is reachable (skips itself otherwise). It immediately caught two
+  more real mismatches on first run — `Card.pick` was nullable on the model but
+  `NOT NULL` in the DB, and `TokenRevocation.token_jti` was `String(255)` on
+  the model but `VARCHAR(500)` in the DB — both now fixed by correcting the
+  models to match the already-deployed schema, not the other way around.
 
 ## 8. Frontend protocol notes (leftovers to design around)
 

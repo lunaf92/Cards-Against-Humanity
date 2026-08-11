@@ -4,7 +4,7 @@ Cross-platform multiplayer card game backend built with FastAPI, PostgreSQL, and
 
 The backend (Phases 1–3) is complete: auth, cards, rooms, random matchmaking, and the
 real-time WebSocket game engine. Next up is the frontend (Expo / React Native) — see
-[docs/DEVELOPMENT_STRATEGY.md](docs/DEVELOPMENT_STRATEGY.md) for the roadmap.
+[docs/development-roadmap.md](docs/development-roadmap.md) for the roadmap.
 
 ## Tech Stack
 
@@ -41,12 +41,12 @@ docs/                  # Plans, protocol specs, developer guide
 - Random matchmaking queue with fill countdown (background worker)
 - Real-time gameplay over WebSockets: rounds, submissions, judging, scoring,
   round/judging timers with auto-submit and auto-pick, reconnect windows
-- WebSocket protocol reference: [docs/PHASE_3_WEBSOCKET_PROTOCOL.md](docs/PHASE_3_WEBSOCKET_PROTOCOL.md)
+- WebSocket protocol reference: [docs/websocket-protocol.md](docs/websocket-protocol.md)
   and [docs/guide/14-realtime-protocol-quick-reference.md](docs/guide/14-realtime-protocol-quick-reference.md)
 
 > **Deployment note**: run exactly **one** backend process. Round/reconnect timers
 > and socket presence are process-local; multiple workers or replicas will
-> misbehave. See [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) §1.
+> misbehave. See [docs/known-risks-and-technical-debt.md](docs/known-risks-and-technical-debt.md) §1.
 
 ## Getting Started
 
@@ -135,7 +135,7 @@ docker compose down
 ## Environment Variables
 
 Configuration is loaded from `.envs/.env.dev` by default (see
-[docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) §6 before any production deployment).
+[docs/known-risks-and-technical-debt.md](docs/known-risks-and-technical-debt.md) §6 before any production deployment).
 
 Key variables:
 - `DATABASE_URL`: PostgreSQL connection string
@@ -147,13 +147,13 @@ Key variables:
 
 ## Documentation
 
-- [docs/plan.md](docs/plan.md) — phased implementation plan (Phases 4–7 = frontend)
-- [docs/DEVELOPMENT_STRATEGY.md](docs/DEVELOPMENT_STRATEGY.md) — what to build/fix at which milestone
-- [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) — known risks and technical debt
+- [docs/implementation-plan.md](docs/implementation-plan.md) — phased implementation plan (Phases 4–7 = frontend)
+- [docs/development-roadmap.md](docs/development-roadmap.md) — what to build/fix at which milestone
+- [docs/known-risks-and-technical-debt.md](docs/known-risks-and-technical-debt.md) — known risks and technical debt
 - [docs/guide/](docs/guide/README.md) — full developer guide (architecture, protocol, onboarding)
-- [docs/requirements.md](docs/requirements.md) — functional requirements
+- [docs/product-requirements.md](docs/product-requirements.md) — functional requirements
 
 ## Next: Frontend (Phase 4+)
 
 Expo / React Native app consuming this API. Start with auth + API client
-(plan.md Phase 4), then lobby/matchmaking (Phase 5), then gameplay (Phase 6).
+(implementation-plan.md Phase 4), then lobby/matchmaking (Phase 5), then gameplay (Phase 6).

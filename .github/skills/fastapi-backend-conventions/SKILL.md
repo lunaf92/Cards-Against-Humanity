@@ -47,4 +47,4 @@ After backend behavior changes:
 1. Run a focused test for the touched router or service.
 2. Hit the affected endpoint if practical.
 3. Confirm docs and schemas still reflect actual behavior.
-4. Update `requirements.md` or phase docs when the change is non-trivial.
+4. Update `docs/product-requirements.md` or the relevant `docs/guide/` chapter when the change is non-trivial.

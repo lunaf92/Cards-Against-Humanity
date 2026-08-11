@@ -4,7 +4,7 @@ This chapter is a one-page matrix for frontend, QA, and backend contributors.
 
 Protocol source of truth:
 
-- [../PHASE_3_WEBSOCKET_PROTOCOL.md](../PHASE_3_WEBSOCKET_PROTOCOL.md)
+- [../websocket-protocol.md](../websocket-protocol.md)
 - implementation in [../../app/routers/ws_rooms.py](../../app/routers/ws_rooms.py)
 
 ## WebSocket Endpoint

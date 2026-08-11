@@ -2,8 +2,8 @@
 
 Written 2026-07-15, after the backend hardening pass. Companion documents:
 
-- [plan.md](plan.md) — the original phased implementation plan (Phases 4–7 = frontend)
-- [FUTURE_WORK.md](FUTURE_WORK.md) — the full inventory of known risks and debt
+- [implementation-plan.md](implementation-plan.md) — the original phased implementation plan (Phases 4–7 = frontend)
+- [known-risks-and-technical-debt.md](known-risks-and-technical-debt.md) — the full inventory of known risks and debt
 
 This document answers a different question than those two: **in what order should
 the remaining work happen, and what must be true before each step?** The core
@@ -19,20 +19,20 @@ matter, instead of fixing everything up front or discovering it in production.
    exposure — neither exists yet. Building the frontend first will also surface
    protocol/API problems that are much cheaper to fix before hardening.
 2. **Fix backend issues at the milestone that makes them real.** Each gate below
-   lists the FUTURE_WORK items that become blocking at that point. Until then,
+   lists the Known Risks items that become blocking at that point. Until then,
    they are documented, not urgent.
-3. **Don't scale prematurely.** The single-process constraint (FUTURE_WORK §1)
+3. **Don't scale prematurely.** The single-process constraint (Known Risks §1)
    is fine for development, playtesting with friends, and even a small beta.
    Solving distributed timers/presence before there's a frontend would be
    effort spent on a problem you don't have yet.
 
 ---
 
-## Milestone 0 — Now: frontend development (plan.md Phases 4–6)
+## Milestone 0 — Now: frontend development (implementation-plan.md Phases 4–6)
 
 Build the Expo app against the existing backend. No backend changes required to
 start. Backend facts the frontend must be designed around (details in
-FUTURE_WORK §8):
+Known Risks §8):
 
 - **Auth**: access tokens now carry a `type` claim; keep access-token TTL
   assumptions out of the client (read expiry from the JWT). Build the refresh
@@ -53,17 +53,17 @@ switching per issue.
 
 ## Milestone 1 — First real playtests (friends / LAN / single server)
 
-Trigger: the full game loop is playable from the app (end of plan.md Phase 6).
+Trigger: the full game loop is playable from the app (end of implementation-plan.md Phase 6).
 
 Must do before inviting other humans:
 
 - **Deployment constraint**: pin to exactly one backend process (no
   `--workers`, one container). Document it in the run instructions. This is a
-  constraint to respect, not code to write (FUTURE_WORK §1).
+  constraint to respect, not code to write (Known Risks §1).
 - **A dev-like deployment without `--reload`**: reload restarts drop all
   in-flight timers mid-game and will look like mysterious game freezes during
-  playtests (FUTURE_WORK §6).
-- **Timer test coverage** (FUTURE_WORK §7): round-timer and judging-timer
+  playtests (Known Risks §6).
+- **Timer test coverage** (Known Risks §7): round-timer and judging-timer
   expiry are now core game mechanics with no end-to-end tests. Playtests will
   exercise them constantly; get deterministic tests first (inject short
   durations — don't sleep 90 s in tests).
@@ -79,7 +79,7 @@ garbage collection, observability.
 Trigger: the app leaves your LAN — TestFlight/APK builds pointing at a hosted
 backend.
 
-Security gate (FUTURE_WORK §3 and §6 — all of these become real the moment the
+Security gate (Known Risks §3 and §6 — all of these become real the moment the
 API is reachable from the internet):
 
 - Real `JWT_SECRET_KEY`, `ENVIRONMENT=production` env file, restricted CORS,
@@ -90,9 +90,9 @@ API is reachable from the internet):
 - **Revocation-table cleanup** wired into the worker loop — the table grows
   unboundedly with every logout.
 - Health-check/restart policy for the pub/sub bridge and the worker
-  (FUTURE_WORK §6) — on a remote host nobody is watching the logs.
+  (Known Risks §6) — on a remote host nobody is watching the logs.
 
-Robustness gate (FUTURE_WORK §2 — real users double-click):
+Robustness gate (Known Risks §2 — real users double-click):
 
 - HTTP room join: lock the room row (same `FOR UPDATE` pattern the WS handlers
   use) to close the capacity race.
@@ -108,23 +108,23 @@ multiplayer bug without logs is guesswork.
 
 Only after the core loop is stable with strangers playing:
 
-- **Custom card pools** (`card_pool_mode` implementation — FUTURE_WORK §4).
+- **Custom card pools** (`card_pool_mode` implementation — Known Risks §4).
   This is the headline feature of the requirements doc; implement per-room deck
   selection in `_select_white_cards_for_room` / `_draw_black_card`, filtered by
   mode and language.
 - **White-deck exhaustion handling** (reshuffle used submissions) — becomes
   reachable once custom pools allow small decks.
-- **Room/data garbage collection** (FUTURE_WORK §5): a worker sweep for
+- **Room/data garbage collection** (Known Risks §5): a worker sweep for
   finished/abandoned rooms and their rounds/submissions.
 - **OAuth providers** (FR-AUTH-05) — the `auth_provider` column already exists.
-- Account deletion + cascade rules (FUTURE_WORK §5) — required for app-store
+- Account deletion + cascade rules (Known Risks §5) — required for app-store
   compliance if the app is published.
 
 ## Milestone 4 — Scaling beyond one process
 
 Trigger: a single process actually becomes the bottleneck (hundreds of
 concurrent sockets), **not before**. This is the big architectural item
-(FUTURE_WORK §1):
+(Known Risks §1):
 
 - Move round/judging/reconnect deadlines into storage (a `deadline_at` column
   or Redis key) and let the worker fire them — the pattern already exists in
@@ -136,7 +136,7 @@ concurrent sockets), **not before**. This is the big architectural item
   pub/sub bridge already handles the broadcast side.
 - At this point also add FK indexes (`room_players.room_id`,
   `submissions.round_id`, `game_rounds.room_id`) and consider timezone-aware
-  timestamps while touching the schema (FUTURE_WORK §5).
+  timestamps while touching the schema (Known Risks §5).
 
 ---
 

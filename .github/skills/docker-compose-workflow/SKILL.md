@@ -13,8 +13,8 @@ Use this skill for any task that starts, restarts, inspects, validates, or execu
 
 - Docker-first execution only. Do not run app services directly on the host.
 - Prefer `docker compose` over direct `docker` commands when interacting with app services.
-- The `backend` service now starts with `alembic upgrade head` before Uvicorn.
-- `postgres` and `redis` are expected to be healthy before backend startup is considered valid.
+- Migrations run once via the one-shot `migrate` service (`alembic upgrade head`, then exits). `backend` and `worker` both wait on `migrate` completing successfully — neither runs `alembic upgrade head` itself anymore. (Previously each ran it in its own startup command, which raced to create `alembic_version` on a fresh database.)
+- `postgres` and `redis` are expected to be healthy before `migrate` is considered valid; `migrate` must complete successfully before `backend` or `worker` start.
 
 ## Canonical Commands
 
@@ -30,6 +30,8 @@ Use this skill for any task that starts, restarts, inspects, validates, or execu
 ## Service Names
 
 - Backend service: `backend`
+- Worker service: `worker`
+- Migration service (one-shot, exits after applying migrations): `migrate`
 - Postgres service: `postgres`
 - Redis service: `redis`
 - Do not use container names where a compose service name is required.

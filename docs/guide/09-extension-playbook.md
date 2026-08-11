@@ -75,7 +75,7 @@ Do not rely only on local host Python behavior. Use the compose stack to ensure 
 4. Add endpoint-level WS test in [../../tests/endpoints/test_ws_rooms.py](../../tests/endpoints/test_ws_rooms.py).
 5. Add service-level test in [../../tests/services](../../tests/services) if transition logic changed.
 6. Update docs:
-   - [../PHASE_3_WEBSOCKET_PROTOCOL.md](../PHASE_3_WEBSOCKET_PROTOCOL.md)
+   - [../websocket-protocol.md](../websocket-protocol.md)
    - this guide chapter or relevant chapter
 
 ## Future Evolution Ideas

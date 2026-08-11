@@ -168,7 +168,7 @@ Why:
 Where this is encoded:
 
 - [../../app/schemas](../../app/schemas)
-- protocol docs in [../PHASE_3_WEBSOCKET_PROTOCOL.md](../PHASE_3_WEBSOCKET_PROTOCOL.md)
+- protocol docs in [../websocket-protocol.md](../websocket-protocol.md)
 
 ## ADR-010: Join-Order Determinism for Host and Czar Rotation
 

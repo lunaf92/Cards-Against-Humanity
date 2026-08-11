@@ -99,7 +99,7 @@ Reconnect lifecycle:
 - `player.reconnected`
 - `player.removed_timeout`
 
-A protocol-focused reference also exists at [../PHASE_3_WEBSOCKET_PROTOCOL.md](../PHASE_3_WEBSOCKET_PROTOCOL.md).
+A protocol-focused reference also exists at [../websocket-protocol.md](../websocket-protocol.md).
 
 ## Cross-Instance Broadcast
 

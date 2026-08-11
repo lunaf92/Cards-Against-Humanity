@@ -136,4 +136,4 @@ Practical checks:
 2. create/join one room
 3. connect two websocket clients
 4. send one command at a time
-5. capture event stream and compare against [../PHASE_3_WEBSOCKET_PROTOCOL.md](../PHASE_3_WEBSOCKET_PROTOCOL.md)
+5. capture event stream and compare against [../websocket-protocol.md](../websocket-protocol.md)
