@@ -29,12 +29,14 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  # One-shot: applies migrations once, then exits. backend and worker both wait
+  # on this instead of each running `alembic upgrade head` themselves — running
+  # it from two containers at once races to CREATE TABLE alembic_version on a
+  # fresh database and one of them loses with a UniqueViolation.
+  migrate:
     build: .
-    container_name: cah_backend
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-    ports:
-      - "8000:8000"
+    container_name: cah_migrate
+    command: alembic upgrade head
     env_file:
       - .envs/.env.dev
     volumes:
@@ -46,6 +48,22 @@ services:
         condition: service_healthy
     environment:
       - PYTHONUNBUFFERED=1
+
+  backend:
+    build: .
+    container_name: cah_backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    env_file:
+      - .envs/.env.dev
+    volumes:
+      - .:/app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - PYTHONUNBUFFERED=1
       # Fast coverage tracer (sys.monitoring); without it, coverage slows tests ~10x
       # and real 90s round timers start firing in the middle of gameplay tests.
       - COVERAGE_CORE=sysmon
@@ -53,16 +71,14 @@ services:
   worker:
     build: .
     container_name: cah_worker
-    command: sh -c "alembic upgrade head && python -m app.workers.matchmaking"
+    command: python -m app.workers.matchmaking
     env_file:
       - .envs/.env.dev
     volumes:
       - .:/app
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       - PYTHONUNBUFFERED=1
 

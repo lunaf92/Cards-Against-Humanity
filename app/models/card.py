@@ -15,7 +15,9 @@ class Card(Base):
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     type = Column(Enum("black", "white", name="card_type"), nullable=False)
     text = Column(String(500), nullable=False)
-    pick = Column(Integer, default=1)
+    # nullable=False matches migration 001's server_default='1' — the model was
+    # missing this constraint despite the DB always having enforced it.
+    pick = Column(Integer, default=1, nullable=False)
     owner_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
     language = Column(String(10), default="en", nullable=False)  # Future: multilingual support (en, es, it, etc.)

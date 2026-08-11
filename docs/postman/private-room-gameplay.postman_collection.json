@@ -1,0 +1,271 @@
+{
+    "info": {
+        "_postman_id": "3f6a2f1a-7b3e-4b7e-9e2a-1a2b3c4d5e6f",
+        "name": "CAH Private Room + Gameplay",
+        "description": "Companion to 'CAH Matchmaking Flow'. That collection only exercises the random matchmaking queue, which auto-creates rooms — it never calls POST /rooms or POST /rooms/join, and never touches the WebSocket gameplay surface at all. This collection covers the private-room path (create by password, join by code) for a controlled 3-player demo, then documents the WebSocket steps to run manually since Postman's native WS requests aren't reliably scriptable into a portable collection JSON.\n\n3 players, not 2: RoomService.start_game hard-requires at least 3 players (rooms.py:391-397, 'Need at least 3 players to start game') — a 2-player room can never leave the lobby.\n\nRun the REST folder top to bottom first (it chains via environment variables, same pattern as the matchmaking collection). Then open three Postman WebSocket requests by hand using the instructions in the 'WebSocket Gameplay' folder description.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "REST Setup",
+            "item": [
+                {
+                    "name": "01 Register Host",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            { "key": "Content-Type", "value": "application/json" }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"username\": \"host_{{$timestamp}}\",\n  \"email\": \"host_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/auth/register",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "auth", "register" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Register host returns 201\", function () {",
+                                    "  pm.response.to.have.status(201);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.environment.set(\"u1_access\", body.access_token);",
+                                    "pm.environment.set(\"u1_refresh\", body.refresh_token);"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "02 Register Guest 1",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            { "key": "Content-Type", "value": "application/json" }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"username\": \"guest1_{{$timestamp}}\",\n  \"email\": \"guest1_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/auth/register",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "auth", "register" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Register guest 1 returns 201\", function () {",
+                                    "  pm.response.to.have.status(201);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.environment.set(\"u2_access\", body.access_token);",
+                                    "pm.environment.set(\"u2_refresh\", body.refresh_token);"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "02b Register Guest 2",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            { "key": "Content-Type", "value": "application/json" }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"username\": \"guest2_{{$timestamp}}\",\n  \"email\": \"guest2_{{$timestamp}}@example.com\",\n  \"password\": \"Pass1234!\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/auth/register",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "auth", "register" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Register guest 2 returns 201\", function () {",
+                                    "  pm.response.to.have.status(201);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.environment.set(\"u3_access\", body.access_token);",
+                                    "pm.environment.set(\"u3_refresh\", body.refresh_token);"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "03 Create Private Room (Host)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            { "key": "Content-Type", "value": "application/json" },
+                            { "key": "Authorization", "value": "Bearer {{u1_access}}" }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"password\": \"letmein\",\n  \"max_players\": 10,\n  \"winning_score\": 3,\n  \"round_timer_seconds\": 90,\n  \"card_pool_mode\": \"default_only\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/rooms",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "rooms" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Create room returns 201\", function () {",
+                                    "  pm.response.to.have.status(201);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.test(\"Room is a private lobby\", function () {",
+                                    "  pm.expect(body.room_kind).to.eql(\"private\");",
+                                    "  pm.expect(body.status).to.eql(\"lobby\");",
+                                    "});",
+                                    "pm.environment.set(\"room_id\", body.id);",
+                                    "pm.environment.set(\"room_code\", body.code);",
+                                    "console.log(\"Room code:\", body.code, \"Room id:\", body.id);"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "04 Join Private Room (Guest 1)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            { "key": "Content-Type", "value": "application/json" },
+                            { "key": "Authorization", "value": "Bearer {{u2_access}}" }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"code\": \"{{room_code}}\",\n  \"password\": \"letmein\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/rooms/join",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "rooms", "join" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Join room returns 200\", function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.test(\"Guest 1 is now a member\", function () {",
+                                    "  pm.expect(body.players.length).to.be.at.least(2);",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "04b Join Private Room (Guest 2)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            { "key": "Content-Type", "value": "application/json" },
+                            { "key": "Authorization", "value": "Bearer {{u3_access}}" }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"code\": \"{{room_code}}\",\n  \"password\": \"letmein\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/rooms/join",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "rooms", "join" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Join room returns 200\", function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.test(\"Guest 2 is now a member\", function () {",
+                                    "  pm.expect(body.players.length).to.be.at.least(3);",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "05 Get Room Details (Confirm All 3 Players)",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            { "key": "Authorization", "value": "Bearer {{u1_access}}" }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/rooms/{{room_id}}",
+                            "host": [ "{{baseUrl}}" ],
+                            "path": [ "rooms", "{{room_id}}" ]
+                        }
+                    },
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Room fetch returns 200\", function () {",
+                                    "  pm.response.to.have.status(200);",
+                                    "});",
+                                    "const body = pm.response.json();",
+                                    "pm.test(\"Exactly 3 players, room still in lobby\", function () {",
+                                    "  pm.expect(body.players.length).to.eql(3);",
+                                    "  pm.expect(body.status).to.eql(\"lobby\");",
+                                    "});",
+                                    "const host = body.players.find(p => p.join_order === 1);",
+                                    "if (host) pm.environment.set(\"host_player_id\", host.player_id);"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "WebSocket Gameplay (manual)",
+            "description": "Postman's native WebSocket request type isn't reliably exportable into a portable collection JSON, so this folder documents the steps instead of scripting them. Do this after running every request in 'REST Setup' above, in order. Needs all 3 players — RoomService.start_game rejects with STATE_CONFLICT ('Need at least 3 players to start game') below that.\n\n**1. Open three WebSocket requests in Postman** (New → WebSocket Request, one per player):\n\n- Host:    `ws://localhost:8000/ws/rooms/{{room_id}}?token={{u1_access}}`\n- Guest 1: `ws://localhost:8000/ws/rooms/{{room_id}}?token={{u2_access}}`\n- Guest 2: `ws://localhost:8000/ws/rooms/{{room_id}}?token={{u3_access}}`\n\nConnect all three. Each should immediately receive `room.connected` then `room.state_sync` in the messages pane. Note the `hand` array in each player's own `room.state_sync` payload — those are raw white-card ids, no text; cross-reference against `GET /cards/default?page_size=100` if you want to read what they say.\n\n**2. Start the game — send from the HOST socket:**\n```json\n{\"event\": \"lobby.start_game\", \"payload\": {}}\n```\nAll three sockets receive `game.started` then `round.started`. Copy the `round_id` and check `czar_id` — the host is czar round 1 (first czar is chosen deterministically), so the two guests are the ones submitting.\n\n**3. Submit cards — send from BOTH non-czar sockets** (guest 1 and guest 2, one card each, matching the black card's `pick` count):\n```json\n{\"event\": \"game.submit_cards\", \"payload\": {\"round_id\": \"<round_id from step 2>\", \"white_card_ids\": [\"<a card id from that player's own hand>\"]}}\n```\nAfter the *first* non-czar submission, all three sockets get `round.submission_accepted` (submitted_count 1, required_count 2) — the round isn't complete yet. Only after the *second* non-czar player submits does `round.judging` broadcast, with the anonymized, shuffled `submissions` array. Copy a `submission_id` from it.\n\n**4. Pick the winner — send from the HOST socket** (host is czar this round):\n```json\n{\"event\": \"game.pick_winner\", \"payload\": {\"round_id\": \"<same round_id>\", \"submission_id\": \"<submission_id from step 3>\"}}\n```\nAll three sockets receive `round.result`, then either another `round.started` (repeat steps 3-4 — czar rotates to one of the guests, so the submitting pair changes each round) or `game.over` once someone's score reaches the room's `winning_score` (3, per the create-room request above).\n\nWhile doing this, keep `docker compose logs -f backend` open in a terminal — WebSocket traffic doesn't produce access-log lines the way REST calls do, so watching the SQL/Redis calls scroll by as you send each message is the best way to see the protocol happen for real.",
+            "item": []
+        }
+    ],
+    "variable": [
+        { "key": "baseUrl", "value": "http://localhost:8000" }
+    ]
+}
