@@ -2,7 +2,7 @@
 
 Cross-platform multiplayer card game backend built with FastAPI, PostgreSQL, and Redis.
 
-The backend (Phases 1–3) is complete: auth, cards, rooms, random matchmaking, and the
+The backend is complete: auth, cards, rooms, random matchmaking, and the
 real-time WebSocket game engine. Next up is the frontend (Expo / React Native) — see
 [docs/development-roadmap.md](docs/development-roadmap.md) for the roadmap.
 
