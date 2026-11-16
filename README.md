@@ -75,7 +75,7 @@ Open browser to `http://localhost:8000/docs` for interactive Swagger UI.
 
 ```bash
 # 1. Seed the default card deck
-docker compose run --rm backend python scripts/seed_cards.py
+docker compose run --rm backend python -m scripts.seed_cards
 
 # 2. Run tests
 docker compose run --rm backend pytest tests/ -v
@@ -143,7 +143,11 @@ Key variables:
 - `JWT_SECRET_KEY`: Secret for signing tokens (change in production!)
 - `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL (default 24h; lower for production)
 - `JWT_REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token TTL (default 30d)
-- `CORS_ORIGINS`: JSON list of allowed origins
+- `CORS_ORIGINS`: JSON list of allowed browser origins for the REST API, e.g.
+  `["http://localhost:5173"]` for a Vite dev server, plus the public origin when
+  served behind a reverse proxy
+- `RECONNECT_WINDOW_SECONDS`: how long a disconnected player may reconnect before
+  being removed from the room (default 60)
 
 ## Documentation
 

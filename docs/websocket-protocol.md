@@ -15,6 +15,22 @@ This document defines the real-time protocol for room and gameplay events.
 - Authorization rule: user must be a room member (or be added by matchmaking flow)
 - Server behavior on auth failure: close socket with code `4401`
 
+### Browser clients
+
+- Browsers cannot set an `Authorization` header on a WebSocket, which is why the
+  access token travels in the `token` query parameter:
+  `new WebSocket(`${wsBase}/ws/rooms/${roomId}?token=${accessToken}`)`.
+- Use `ws://` when the page is served over `http://` and `wss://` behind a
+  TLS-terminating reverse proxy. The proxy must forward the `Upgrade` /
+  `Connection` headers for `/ws/` and should not time out idle sockets sooner
+  than the client pings (`client.ping`, e.g. every 25 s).
+- The server always *accepts* the socket before rejecting it, so a browser sees
+  an `error` event followed by `close` with the application close code below
+  (not a bare `1006`).
+- `CORS_ORIGINS` (JSON list, env) only governs the REST API. WebSocket
+  connections are authenticated by the token alone.
+- A token is only checked at connect time; an open socket survives token expiry.
+
 Recommended close codes:
 - `1000` normal closure
 - `4401` unauthorized (invalid/expired token)
@@ -75,7 +91,8 @@ Purpose: host starts game in private lobby.
 
 Guards:
 - requester is host
-- room status is `lobby` or `matchmaking_locked`
+- room status is `lobby` or `matchmaking_lobby`, or the room is a random room
+  that the matchmaking worker already locked (`in_progress` with no round yet)
 - player count >= 3
 
 Payload:
@@ -168,6 +185,36 @@ Payload:
   "game": null
 }
 ```
+
+`game` is `null` unless a round is active (`waiting` or `judging`). While a round
+is active it is everything a client needs to render the table after a (re)connect
+or page reload:
+
+```json
+{
+  "round_id": "4fbf1bb8-c2fd-42b4-a8f2-51230d3da950",
+  "round_number": 3,
+  "status": "waiting",
+  "czar_id": "6fd6f46d-7a3d-4d4a-9fa8-cbeac13f1986",
+  "submitted_count": 1,
+  "required_count": 3,
+  "submitted_player_ids": ["f2a9ca2f-6be8-46b7-951b-20f0f07f830f"],
+  "has_submitted": false,
+  "black_card": { "id": "3c6bce6a-...", "text": "Why can't I sleep at night?", "pick": 1 },
+  "hand": ["6f8f0f51-f2da-4e16-8f4f-6b5d31b1f020"],
+  "hand_cards": [
+    { "id": "6f8f0f51-f2da-4e16-8f4f-6b5d31b1f020", "text": "A mime having a stroke." }
+  ],
+  "phase_expires_at": "2026-04-26T12:32:48.100Z"
+}
+```
+
+- `hand` / `hand_cards`: the requesting player's own hand (ids only / ids with text).
+- `has_submitted`, `submitted_player_ids`: who has already played this round.
+- `submissions`: present only when `status` is `judging`; same shape as in
+  `round.judging`. The order is stable across repeated syncs.
+- `phase_expires_at`: deadline of the running submission or judging timer, or
+  `null` when no timer is armed.
 
 ### Lobby Presence
 
@@ -293,6 +340,21 @@ Payload:
 }
 ```
 
+#### player.hand
+Personal event (only sent to the owning player) right after every
+`round.started`, carrying that player's current hand. Clients that miss it get
+the same data from `room.state_sync` (`game.hand_cards`).
+
+Payload:
+```json
+{
+  "round_id": "4fbf1bb8-c2fd-42b4-a8f2-51230d3da950",
+  "hand": [
+    { "id": "6f8f0f51-f2da-4e16-8f4f-6b5d31b1f020", "text": "A mime having a stroke." }
+  ]
+}
+```
+
 #### round.submission_accepted
 Sent to submitter (personal event) and optionally as aggregate update to room.
 
@@ -306,8 +368,20 @@ Payload:
 }
 ```
 
+#### round.timer_expired
+Informational: the submission timer ran out. Idle players were auto-submitted
+(as many cards as the black card's `pick`). Followed by `round.judging`, or by
+`round.started` when nobody had any submission and the round was skipped.
+
+Payload:
+```json
+{ "round_id": "4fbf1bb8-c2fd-42b4-a8f2-51230d3da950" }
+```
+
 #### round.judging
-Sent when all submissions are in or timer auto-submits unresolved players.
+Sent when all submissions are in, when the timer auto-submits unresolved
+players, or when the last player who had not submitted is removed by a
+reconnect timeout.
 
 Payload:
 ```json
@@ -318,8 +392,18 @@ Payload:
       "submission_id": "08925f4f-a693-45c6-ad57-84dbfc2433ea",
       "white_card_texts": ["A mime having a stroke."]
     }
-  ]
+  ],
+  "judging_expires_at": "2026-04-26T12:34:18.100Z"
 }
+```
+
+#### round.judging_expired
+Informational: the czar did not pick in time and a random winner was chosen.
+Followed by the normal `round.result` sequence with `correlation_id = null`.
+
+Payload:
+```json
+{ "round_id": "4fbf1bb8-c2fd-42b4-a8f2-51230d3da950", "reason": "czar_timeout" }
 ```
 
 #### round.result
@@ -338,11 +422,16 @@ Payload:
 }
 ```
 
+If the winning submission's author was removed from the room in the meantime,
+the round still resolves: `winner_player_id` names the departed player and no
+score changes.
+
 #### game.over
 Payload:
 ```json
 {
   "winner_player_id": "f2a9ca2f-6be8-46b7-951b-20f0f07f830f",
+  "reason": "winning_score_reached",
   "scoreboard": [
     {
       "player_id": "f2a9ca2f-6be8-46b7-951b-20f0f07f830f",
@@ -351,6 +440,11 @@ Payload:
   ]
 }
 ```
+
+`reason` values:
+- `winning_score_reached` — `winner_player_id` is the winner.
+- `not_enough_players` — a reconnect timeout left fewer than 3 players;
+  `winner_player_id` is `null` and `scoreboard` holds the final scores.
 
 ### Reconnect and Timeout
 
@@ -380,6 +474,13 @@ Payload:
   "reason": "reconnect_timeout"
 }
 ```
+
+Sent when a player is still disconnected after the reconnect window
+(`RECONNECT_WINDOW_SECONDS`, default 60). The player is removed from the room.
+Depending on the game state it may be followed by `room.host_changed` (the host
+left), `round.judging` (everyone remaining had already submitted),
+`round.started` (the czar left; the round is skipped) or `game.over` with
+`reason = "not_enough_players"`.
 
 ### Utility
 
@@ -420,6 +521,14 @@ Common protocol-level error codes:
 - `DUPLICATE_SUBMISSION`
 - `STATE_CONFLICT`
 - `INTERNAL_ERROR`
+
+Error handling notes:
+- A frame that is not a JSON object (or whose `payload` is not an object) is
+  answered with `INVALID_PAYLOAD`; the socket stays open.
+- An unexpected server-side failure while handling a command is answered with
+  `INTERNAL_ERROR` (carrying the command's `correlation_id`); the socket stays
+  open and the client should send `room.state_sync.request`.
+- Clients must ignore events they do not know, so new events can be added.
 
 ## Ordering and Idempotency Rules
 
