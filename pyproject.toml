@@ -38,7 +38,9 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+# The pinned ruff (0.1.x) predates py313 and refuses to start with it; py312 is
+# the newest target it knows. Raise this together with the ruff version.
+target-version = "py312"
 
 [tool.black]
 line-length = 100
