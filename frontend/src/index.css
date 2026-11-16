@@ -558,7 +558,14 @@ h2 {
   margin-right: 0;
 }
 .muted-hand .hand-row .card {
-  opacity: 0.6;
+  /* Solid grey "out of play" cards instead of see-through ones. */
+  background: #8d929c;
+  border-color: #7a7f89;
+  color: #3b3e45;
+  box-shadow: none;
+}
+.muted-hand .hand-row .card .card-foot {
+  opacity: 0.4;
 }
 .submissions {
   display: grid;
