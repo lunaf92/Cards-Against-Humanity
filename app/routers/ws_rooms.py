@@ -19,6 +19,7 @@ from app.core.security import decode_token
 from app.models import Card, GameRound, Room, Submission, User
 from app.schemas.ws import WSEvent
 from app.services.auth import AuthService
+from app.services.decks import DeckService
 from app.services.rooms import RECONNECT_WINDOW_TTL, RoomGameError, RoomService
 from app.services.ws_connection_manager import connection_manager
 
@@ -647,7 +648,9 @@ async def _build_room_state_payload(
             "max_players": room_obj.max_players,
             "winning_score": room_obj.winning_score,
             "round_timer_seconds": room_obj.round_timer_seconds,
-            "card_pool_mode": room_obj.card_pool_mode,
+            "decks": [
+                {**deck, "id": str(deck["id"])} for deck in await DeckService.room_decks(db, room_id)
+            ],
             "matchmaking_fill_expires_at": room_obj.matchmaking_fill_expires_at,
         },
         "players": players,

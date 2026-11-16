@@ -19,6 +19,7 @@ from app.schemas.room import (
     RoomJoinRequest,
     RoomResponse,
 )
+from app.services.decks import DeckService
 from app.services.rooms import RoomService
 from app.schemas.ws import WSEvent
 from app.services.ws_connection_manager import connection_manager
@@ -30,6 +31,7 @@ async def _build_room_details(db: AsyncSession, room) -> RoomDetailsResponse:
     """Shape room plus player list into API response model."""
     players = await RoomService.list_room_players(db, room.id)
     room_data = RoomResponse.model_validate(room).model_dump()
+    room_data["decks"] = await DeckService.room_decks(db, room.id)
     return RoomDetailsResponse(**room_data, players=players)
 
 
@@ -159,7 +161,7 @@ async def update_room_config(
         WSEvent(
             event="room.config_updated",
             room_id=room.id,
-            payload={"room": RoomResponse.model_validate(room).model_dump(mode="json")},
+            payload={"room": details.model_dump(mode="json", exclude={"players"})},
         ).model_dump(mode="json"),
     )
     return details

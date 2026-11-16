@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.security import hash_password, verify_password
 from app.models import Card, GameRound, Room, RoomPlayer, Submission, User
 from app.schemas.room import RoomConfigUpdateRequest, RoomCreateRequest, RoomJoinRequest
+from app.services.decks import DeckService
 
 MATCHMAKING_QUEUE_KEY = "matchmaking:queue"
 GAME_WHITE_DECK_KEY = "game:{room_id}:white_deck"
@@ -146,10 +147,11 @@ class RoomService:
 
     @staticmethod
     async def _select_white_cards_for_room(db: AsyncSession, room: Room) -> list[UUID]:
-        """Select white-card pool for room dealing; currently default-only."""
+        """White-card pool for room dealing: every white card in the room's decks."""
+        pool = await DeckService.card_filter(db, room.id)
         result = await db.execute(
             select(Card.id)
-            .where(Card.type == "white", Card.is_default.is_(True))
+            .where(Card.type == "white", pool)
             .order_by(Card.created_at.asc(), Card.id.asc())
         )
         return [card_id for (card_id,) in result.all()]
@@ -255,7 +257,8 @@ class RoomService:
         deck = await RoomService._redis_json_get(redis_client, key)
         while True:
             if not deck:
-                result = await db.execute(select(Card.id).where(Card.type == "black"))
+                pool = await DeckService.card_filter(db, room_id)
+                result = await db.execute(select(Card.id).where(Card.type == "black", pool))
                 deck = [card_id for (card_id,) in result.all()]
                 if not deck:
                     raise RoomGameError(
@@ -418,6 +421,24 @@ class RoomService:
         return payload
 
     @staticmethod
+    async def _check_card_pool(db: AsyncSession, room: Room, players_count: int) -> None:
+        """Refuse to start when the chosen decks cannot deal a game."""
+        pool = await DeckService.card_filter(db, room.id)
+        result = await db.execute(select(Card.type, func.count()).where(pool).group_by(Card.type))
+        counts = {"black": 0, "white": 0, **dict(result.all())}
+        required_white = players_count * 10
+        if counts["black"] < 1 or counts["white"] < required_white:
+            raise RoomGameError(
+                "STATE_CONFLICT",
+                f"The chosen decks need at least 1 black and {required_white} white cards",
+                {
+                    "black_available": counts["black"],
+                    "white_available": counts["white"],
+                    "white_required": required_white,
+                },
+            )
+
+    @staticmethod
     async def start_game(db: AsyncSession, room: Room, current_user_id: UUID, redis_client) -> dict:
         """Validate lobby start and create the first round for the room."""
         if room.host_id != current_user_id:
@@ -447,6 +468,8 @@ class RoomService:
                 "Need at least 3 players to start game",
                 {"player_count": players_count},
             )
+
+        await RoomService._check_card_pool(db, room, players_count)
 
         next_round_number = 1 if current_round is None else int(current_round) + 1
         czar_id = await RoomService._next_czar_id(db, room.id)
@@ -699,10 +722,11 @@ class RoomService:
             max_players=payload.max_players,
             winning_score=payload.winning_score,
             round_timer_seconds=payload.round_timer_seconds,
-            card_pool_mode=payload.card_pool_mode,
         )
         db.add(room)
         await db.flush()
+        if payload.deck_ids is not None:
+            await DeckService.set_room_decks(db, room, payload.deck_ids, host_user.id)
 
         db.add(
             RoomPlayer(
@@ -1104,8 +1128,8 @@ class RoomService:
         if payload.round_timer_seconds is not None:
             room.round_timer_seconds = payload.round_timer_seconds
 
-        if payload.card_pool_mode is not None:
-            room.card_pool_mode = payload.card_pool_mode
+        if payload.deck_ids is not None:
+            await DeckService.set_room_decks(db, room, payload.deck_ids, host_user_id)
 
         await db.flush()
         return room

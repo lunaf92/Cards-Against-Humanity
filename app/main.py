@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routers import auth, cards, health, rooms, users, ws_rooms
+from app.routers import auth, cards, decks, health, rooms, users, ws_rooms
 from app.services.ws_connection_manager import connection_manager
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(cards.router)
+app.include_router(decks.router)
 app.include_router(users.router)
 app.include_router(rooms.router)
 app.include_router(ws_rooms.router)

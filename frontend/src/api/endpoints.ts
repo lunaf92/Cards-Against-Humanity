@@ -1,5 +1,5 @@
 import { api } from './http'
-import type { QueueResponse, RoomConfig, RoomDetails, TokenPair, User } from './types'
+import type { DeckSummary, QueueResponse, RoomConfig, RoomDetails, TokenPair, User } from './types'
 
 export const authApi = {
   register: (username: string, password: string) =>
@@ -21,4 +21,8 @@ export const roomsApi = {
     api<RoomDetails>(`/rooms/${roomId}/config`, { method: 'PATCH', body: config }),
   queue: () => api<QueueResponse>('/rooms/queue', { method: 'POST' }),
   leaveQueue: () => api<{ removed: boolean }>('/rooms/queue', { method: 'DELETE' }),
+}
+
+export const decksApi = {
+  usable: () => api<DeckSummary[]>('/decks'),
 }

@@ -4,7 +4,7 @@ import { useRoomStore } from './roomStore'
 
 const ROOM = {
   id: 'r1', code: 'ABC123', host_id: 'u1', room_kind: 'private' as const, status: 'lobby' as const,
-  max_players: 10, winning_score: 8, round_timer_seconds: 90, card_pool_mode: 'default_only',
+  max_players: 10, winning_score: 8, round_timer_seconds: 90, decks: [],
   matchmaking_fill_expires_at: null,
 }
 const players = ['u1', 'u2', 'u3'].map((id, i) => ({

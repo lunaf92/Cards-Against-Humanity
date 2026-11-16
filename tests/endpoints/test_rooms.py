@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import status
 from sqlalchemy import select
 
-from app.models import Room, RoomPlayer, User
+from app.models import Card, Deck, Room, RoomPlayer, User
 from app.routers import rooms as rooms_router
 from app.services.rooms import RoomService
 
@@ -76,7 +76,6 @@ def test_create_room_and_get_room_details(client):
             "max_players": 6,
             "winning_score": 7,
             "round_timer_seconds": 75,
-            "card_pool_mode": "default_only",
         },
     )
     assert create_response.status_code == status.HTTP_201_CREATED
@@ -107,7 +106,6 @@ def test_join_room_with_password_and_capacity_guard(client):
             "max_players": 2,
             "winning_score": 8,
             "round_timer_seconds": 90,
-            "card_pool_mode": "default_only",
         },
     )
     assert create_response.status_code == status.HTTP_201_CREATED
@@ -144,7 +142,6 @@ def test_update_room_config_is_host_only_and_lobby_only(client, test_db):
             "max_players": 6,
             "winning_score": 7,
             "round_timer_seconds": 70,
-            "card_pool_mode": "default_only",
         },
     )
     room_id = create_response.json()["id"]
@@ -388,3 +385,40 @@ def test_config_update_is_broadcast_to_room(client, monkeypatch):
     assert len(events) == 1
     assert events[0][1]["event"] == "room.config_updated"
     assert events[0][1]["payload"]["room"]["winning_score"] == 5
+
+
+def test_room_decks_are_chosen_on_create_and_changed_in_lobby(client, test_db):
+    """Hosts pick decks when creating a room and can change them before starting."""
+
+    async def _seed():
+        async with test_db() as session:
+            base = Deck(name="Base Game", slug="base-game", is_public=True)
+            extra = Deck(name="Extra", slug="the-first-expansion", is_public=True)
+            session.add_all([base, extra])
+            await session.flush()
+            session.add(Card(type="white", text="An answer", is_default=True, deck_id=base.id))
+            await session.commit()
+            return str(base.id), str(extra.id)
+
+    base_id, extra_id = asyncio.run(_seed())
+    token = _register_and_get_access_token(client, "deck_host")
+
+    default_room = client.post("/rooms", headers=_auth_headers(token), json={"password": "roompass"}).json()
+    assert {d["id"] for d in default_room["decks"]} == {base_id, extra_id}
+
+    decks = client.get("/decks", headers=_auth_headers(token)).json()
+    assert {d["name"]: d["white_count"] for d in decks} == {"Base Game": 1, "Extra": 0}
+
+    room = client.post(
+        "/rooms", headers=_auth_headers(token), json={"password": "roompass", "deck_ids": [extra_id]}
+    ).json()
+    assert [d["id"] for d in room["decks"]] == [extra_id]
+
+    updated = client.patch(
+        f"/rooms/{room['id']}/config", headers=_auth_headers(token), json={"deck_ids": [base_id, extra_id]}
+    )
+    assert updated.status_code == status.HTTP_200_OK
+    assert {d["id"] for d in updated.json()["decks"]} == {base_id, extra_id}
+
+    empty = client.patch(f"/rooms/{room['id']}/config", headers=_auth_headers(token), json={"deck_ids": []})
+    assert empty.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY

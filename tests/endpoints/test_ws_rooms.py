@@ -110,7 +110,6 @@ def _create_private_room_with_code(
             "max_players": 6,
             "winning_score": winning_score,
             "round_timer_seconds": 90,
-            "card_pool_mode": "default_only",
         },
     )
     assert response.status_code == status.HTTP_201_CREATED

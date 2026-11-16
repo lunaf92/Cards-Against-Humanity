@@ -24,11 +24,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models import Card, Deck
+# Family Edition is the kid-friendly set; mixed into the adult packs it dilutes them.
+from app.services.decks import EXCLUDED_BY_DEFAULT
 
 PACKS_DIR = Path(__file__).parent / "card_packs"
 DEFAULT_LANGUAGE = "en"
-# Family Edition is the kid-friendly set; mixed into the adult packs it dilutes them.
-EXCLUDED_BY_DEFAULT = {"family-edition"}
 BLANK = re.compile(r"_{2,}")
 MAX_PICK = 3
 

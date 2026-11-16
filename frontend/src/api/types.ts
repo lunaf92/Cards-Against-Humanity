@@ -33,7 +33,7 @@ export interface Room {
   max_players: number
   winning_score: number
   round_timer_seconds: number
-  card_pool_mode: string
+  decks: RoomDeck[]
   matchmaking_fill_expires_at: string | null
 }
 
@@ -46,6 +46,22 @@ export interface RoomConfig {
   max_players: number
   winning_score: number
   round_timer_seconds: number
+  deck_ids: string[]
+}
+
+export interface RoomDeck {
+  id: string
+  name: string
+  is_builtin: boolean
+  is_public: boolean
+  black_count: number
+  white_count: number
+}
+
+export interface DeckSummary extends RoomDeck {
+  is_owner: boolean
+  // In the selection a room gets when nobody picks.
+  is_default: boolean
 }
 
 export interface QueueResponse {

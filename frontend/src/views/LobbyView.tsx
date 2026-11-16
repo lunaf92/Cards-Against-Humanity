@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { roomsApi } from '../api/endpoints'
-import type { RoomConfig } from '../api/types'
+import { decksApi, roomsApi } from '../api/endpoints'
+import type { DeckSummary, RoomConfig } from '../api/types'
+import { DeckPicker } from '../components/DeckPicker'
 import { useCountdown } from '../hooks/useCountdown'
 import { useRoomStore } from '../stores/roomStore'
 import { Stepper } from '../pages/HomePage'
@@ -25,6 +26,22 @@ export default function LobbyView({ meId }: { meId: string }) {
   const lockedRandom = isRandom && room.status === 'in_progress'
   const enough = players.length >= MIN_PLAYERS
   const canStart = isHost && enough && (!isRandom || lockedRandom)
+
+  // The host picks from every deck they can use; everyone else just sees the room's decks.
+  const [usable, setUsable] = useState<DeckSummary[] | null>(null)
+  useEffect(() => {
+    if (!isHost || isRandom) return
+    let live = true
+    decksApi
+      .usable()
+      .then((list) => live && setUsable(list))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [isHost, isRandom])
+  const roomDecks: DeckSummary[] = (room.decks ?? []).map((d) => ({ ...d, is_owner: false, is_default: false }))
+  const deckChoices = isHost && usable ? usable : roomDecks
 
   async function saveConfig(patch: Partial<RoomConfig>) {
     setSavingError(null)
@@ -119,6 +136,15 @@ export default function LobbyView({ meId }: { meId: string }) {
             disabled={!isHost}
             onChange={(v) => void saveConfig({ max_players: v })}
           />
+          {deckChoices.length > 0 && (
+            <DeckPicker
+              decks={deckChoices}
+              selected={roomDecks.map((d) => d.id)}
+              onChange={(ids) => void saveConfig({ deck_ids: ids })}
+              players={players.length}
+              disabled={!isHost}
+            />
+          )}
           {!isHost && <p className="hint">Only the host can change settings.</p>}
           {savingError && <p className="error">{savingError}</p>}
         </section>

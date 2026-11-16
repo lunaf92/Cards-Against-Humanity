@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { roomsApi } from '../api/endpoints'
-import type { RoomDetails } from '../api/types'
+import { decksApi, roomsApi } from '../api/endpoints'
+import type { DeckSummary, RoomDetails } from '../api/types'
+import { DeckPicker } from '../components/DeckPicker'
 import { Logo } from '../components/Logo'
 import { useAuthStore } from '../stores/authStore'
 
@@ -85,6 +86,25 @@ function CreateRoom({ onBack, onDone, onError }: PanelProps) {
   const [timer, setTimer] = useState(90)
   const [maxPlayers, setMaxPlayers] = useState(10)
   const [busy, setBusy] = useState(false)
+  const [decks, setDecks] = useState<DeckSummary[]>([])
+  const [deckIds, setDeckIds] = useState<string[]>([])
+
+  useEffect(() => {
+    let live = true
+    decksApi
+      .usable()
+      .then((list) => {
+        if (!live) return
+        setDecks(list)
+        setDeckIds(list.filter((d) => d.is_default).map((d) => d.id))
+      })
+      .catch(() => {
+        /* no decks yet: the room falls back to the default cards */
+      })
+    return () => {
+      live = false
+    }
+  }, [])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -95,6 +115,7 @@ function CreateRoom({ onBack, onDone, onError }: PanelProps) {
         winning_score: winningScore,
         round_timer_seconds: timer,
         max_players: maxPlayers,
+        ...(deckIds.length > 0 ? { deck_ids: deckIds } : {}),
       })
       onDone(room.id)
     } catch (err) {
@@ -114,6 +135,7 @@ function CreateRoom({ onBack, onDone, onError }: PanelProps) {
       <Stepper label="Points to win" value={winningScore} min={3} max={20} onChange={setWinningScore} />
       <Stepper label="Seconds per round" value={timer} min={30} max={300} step={15} onChange={setTimer} />
       <Stepper label="Max players" value={maxPlayers} min={3} max={10} onChange={setMaxPlayers} />
+      {decks.length > 0 && <DeckPicker decks={decks} selected={deckIds} onChange={setDeckIds} players={3} />}
       <div className="row">
         <button type="button" className="btn ghost" onClick={onBack}>
           Back

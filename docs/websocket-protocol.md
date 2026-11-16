@@ -189,7 +189,9 @@ Payload:
     "max_players": 10,
     "winning_score": 8,
     "round_timer_seconds": 90,
-    "card_pool_mode": "default_only",
+    "decks": [
+      { "id": "uuid", "name": "Base Game", "is_builtin": true, "is_public": true, "black_count": 80, "white_count": 502 }
+    ],
     "matchmaking_fill_expires_at": null
   },
   "players": [
