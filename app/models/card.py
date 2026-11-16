@@ -21,6 +21,7 @@ class Card(Base):
     owner_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     is_default = Column(Boolean, default=False, nullable=False)
     language = Column(String(10), default="en", nullable=False)  # Future: multilingual support (en, es, it, etc.)
+    deck_id = Column(PG_UUID(as_uuid=True), ForeignKey("decks.id", ondelete="CASCADE"), nullable=True, index=True)
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(UTC).replace(tzinfo=None),
@@ -29,3 +30,4 @@ class Card(Base):
 
     # Relationships
     owner = relationship("User", back_populates="cards")
+    deck = relationship("Deck", back_populates="cards")

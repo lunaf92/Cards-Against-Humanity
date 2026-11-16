@@ -1,14 +1,15 @@
 """Load the bundled card packs (scripts/card_packs) into the cards table.
 
-Safe to rerun: a card whose (type, text, language) already exists is skipped.
+Each pack becomes a built-in deck (matched by its file name). Safe to rerun:
+a card whose (type, text, language) already exists is not inserted again, but
+it is tagged with its pack's deck if it has none yet, so running this once
+after migration 006 fills in the deck for cards seeded before decks existed.
 
     python -m scripts.seed_cards                      # default packs
     python -m scripts.seed_cards --list               # show available packs
     python -m scripts.seed_cards --packs base-game,the-first-expansion
     python -m scripts.seed_cards --packs all          # every English pack
 
-Games deal from every default card regardless of language, so only seed one
-language per database until rooms can choose a language.
 """
 from __future__ import annotations
 
@@ -19,10 +20,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.models import Card
+from app.models import Card, Deck
 
 PACKS_DIR = Path(__file__).parent / "card_packs"
 DEFAULT_LANGUAGE = "en"
@@ -40,6 +41,7 @@ class SeedCard:
     text: str
     pick: int
     language: str
+    pack: str
 
 
 def pick_for(text: str) -> int:
@@ -67,8 +69,14 @@ def resolve_packs(spec: str | None, language: str = DEFAULT_LANGUAGE) -> list[st
     return wanted
 
 
+def pack_name(slug: str, language: str = DEFAULT_LANGUAGE) -> str:
+    """Display name stored in the pack file."""
+    data = json.loads(available_packs(language)[slug].read_text(encoding="utf-8"))
+    return str(data.get("name") or slug.replace("-", " ").title())
+
+
 def load_cards(slugs: list[str], language: str = DEFAULT_LANGUAGE) -> list[SeedCard]:
-    """Read the chosen packs, de-duplicated across packs, in a stable order."""
+    """Read the chosen packs, de-duplicated across packs (first pack wins), in a stable order."""
     packs = available_packs(language)
     seen: set[tuple[str, str]] = set()
     cards: list[SeedCard] = []
@@ -81,19 +89,47 @@ def load_cards(slugs: list[str], language: str = DEFAULT_LANGUAGE) -> list[SeedC
                     continue
                 seen.add((kind, text))
                 pick = pick_for(text) if kind == "black" else 1
-                cards.append(SeedCard(kind, text, pick, language))
+                cards.append(SeedCard(kind, text, pick, language, slug))
     return cards
 
 
-async def insert_cards(session: AsyncSession, cards: list[SeedCard]) -> tuple[int, int]:
-    """Insert cards that are not in the table yet. Returns (black_added, white_added)."""
+async def ensure_decks(session: AsyncSession, slugs: list[str], language: str = DEFAULT_LANGUAGE) -> dict[str, Deck]:
+    """Create (or rename) the built-in deck for each pack. Returns slug -> deck."""
+    result = await session.execute(select(Deck).where(Deck.slug.in_(slugs)))
+    decks = {deck.slug: deck for deck in result.scalars()}
+    for slug in slugs:
+        name = pack_name(slug, language)
+        deck = decks.get(slug)
+        if deck is None:
+            deck = Deck(slug=slug, name=name, language=language, owner_id=None, is_public=True)
+            session.add(deck)
+            decks[slug] = deck
+        else:
+            deck.name = name
+    await session.flush()
+    return decks
+
+
+async def insert_cards(session: AsyncSession, cards: list[SeedCard]) -> tuple[int, int, int]:
+    """Insert missing cards and tag untagged ones with their deck.
+
+    Returns (black_added, white_added, tagged).
+    """
+    slugs = list(dict.fromkeys(card.pack for card in cards))
+    language = cards[0].language if cards else DEFAULT_LANGUAGE
+    decks = await ensure_decks(session, slugs, language)
     result = await session.execute(
-        select(Card.type, Card.text, Card.language).where(Card.is_default.is_(True))
+        select(Card.id, Card.type, Card.text, Card.language, Card.deck_id).where(Card.is_default.is_(True))
     )
-    existing = {(row.type, row.text, row.language) for row in result}
+    existing = {(row.type, row.text, row.language): row for row in result}
     added = {"black": 0, "white": 0}
+    to_tag: dict[object, list[object]] = {}
     for card in cards:
-        if (card.type, card.text, card.language) in existing:
+        deck = decks[card.pack]
+        row = existing.get((card.type, card.text, card.language))
+        if row is not None:
+            if row.deck_id is None:
+                to_tag.setdefault(deck.id, []).append(row.id)
             continue
         session.add(
             Card(
@@ -103,11 +139,22 @@ async def insert_cards(session: AsyncSession, cards: list[SeedCard]) -> tuple[in
                 language=card.language,
                 is_default=True,
                 owner_id=None,
+                deck_id=deck.id,
             )
         )
         added[card.type] += 1
+    for deck_id, card_ids in to_tag.items():
+        await session.execute(update(Card).where(Card.id.in_(card_ids)).values(deck_id=deck_id))
     await session.commit()
-    return added["black"], added["white"]
+    return added["black"], added["white"], sum(len(ids) for ids in to_tag.values())
+
+
+async def count_untagged(session: AsyncSession) -> int:
+    """Built-in cards that belong to no deck (e.g. from a pack no longer seeded)."""
+    result = await session.execute(
+        select(func.count()).select_from(Card).where(Card.is_default.is_(True), Card.deck_id.is_(None))
+    )
+    return result.scalar_one()
 
 
 async def seed_cards(pack_spec: str | None = None, language: str = DEFAULT_LANGUAGE) -> None:
@@ -120,11 +167,16 @@ async def seed_cards(pack_spec: str | None = None, language: str = DEFAULT_LANGU
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
         async with session_factory() as session:
-            black, white = await insert_cards(session, cards)
+            black, white, tagged = await insert_cards(session, cards)
+            untagged = await count_untagged(session)
     finally:
         await engine.dispose()
     print(f"Packs: {', '.join(slugs)}")
     print(f"Added {black} black and {white} white cards ({len(cards) - black - white} already present)")
+    if tagged:
+        print(f"Tagged {tagged} existing cards with their deck")
+    if untagged:
+        print(f"{untagged} built-in cards match no seeded pack and have no deck")
 
 
 def main() -> None:
