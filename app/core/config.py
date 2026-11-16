@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     API_VERSION: str = "0.1.0"
     API_DESCRIPTION: str = "Cross-platform multiplayer card game"
     CORS_ORIGINS: List[str] = ["http://localhost:8000"]
+    # How long a disconnected player may reconnect before being removed from the room.
+    RECONNECT_WINDOW_SECONDS: int = 60
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
