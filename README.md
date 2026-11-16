@@ -76,6 +76,7 @@ Open browser to `http://localhost:8000/docs` for interactive Swagger UI.
 ```bash
 # 1. Seed the default card deck
 docker compose run --rm backend python -m scripts.seed_cards
+# safe to rerun; --list shows the packs, --packs a,b picks them
 
 # 2. Run tests
 docker compose run --rm backend pytest tests/ -v
