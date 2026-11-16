@@ -1083,3 +1083,6 @@ h2 {
 .deck-page .sheet-body .card { align-self: center; }
 .deck-tile .badges { margin-left: 0; justify-content: flex-start; }
 .deck-page .sheet-body .card.medium { width: min(46vw, 180px); }
+.copy-decks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.copy-deck { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }

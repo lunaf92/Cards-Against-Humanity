@@ -649,7 +649,8 @@ async def _build_room_state_payload(
             "winning_score": room_obj.winning_score,
             "round_timer_seconds": room_obj.round_timer_seconds,
             "decks": [
-                {**deck, "id": str(deck["id"])} for deck in await DeckService.room_decks(db, room_id)
+                {**deck, "id": str(deck["id"]), "owner_id": str(deck["owner_id"]) if deck["owner_id"] else None}
+                for deck in await DeckService.room_decks(db, room_id)
             ],
             "matchmaking_fill_expires_at": room_obj.matchmaking_fill_expires_at,
         },

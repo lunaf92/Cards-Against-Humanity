@@ -41,6 +41,7 @@ def _summary(deck: Deck, counts: dict[str, int]) -> dict:
         "id": deck.id,
         "name": deck.name,
         "is_builtin": deck.owner_id is None,
+        "owner_id": deck.owner_id,
         "is_public": deck.is_public,
         "black_count": counts["black"],
         "white_count": counts["white"],

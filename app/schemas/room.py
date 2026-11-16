@@ -44,6 +44,7 @@ class RoomDeckSummary(BaseModel):
     name: str
     is_builtin: bool
     is_public: bool
+    owner_id: UUID | None = None
     black_count: int
     white_count: int
 

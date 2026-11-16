@@ -54,6 +54,7 @@ export interface RoomDeck {
   name: string
   is_builtin: boolean
   is_public: boolean
+  owner_id: string | null
   black_count: number
   white_count: number
 }
