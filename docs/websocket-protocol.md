@@ -140,6 +140,25 @@ Guards:
 
 Server success event: `round.result`
 
+### room.reaction
+Purpose: send a quick reaction (emoji or stock phrase) to everyone in the room.
+
+Payload:
+```json
+{ "reaction_id": "oh_come_on" }
+```
+
+Guards:
+- `reaction_id` is one of: `laugh`, `fire`, `grimace`, `sick`, `clap`, `facepalm`,
+  `nice_one`, `oh_no`, `hurry_up`, `oh_come_on`, `regret_nothing`, `gg`
+  (else `INVALID_PAYLOAD`). No free text.
+- at most one reaction per player every 2 s (else `RATE_LIMITED`, with
+  `details.retry_after` in seconds).
+
+Server success event: `room.reaction` broadcast to the room (sender included),
+payload `{ "player_id": "<uuid>", "reaction_id": "oh_come_on" }`. Nothing is stored.
+The client maps ids to the emoji or text it shows.
+
 ## Server -> Client Events
 
 ### Connection and Sync
@@ -535,6 +554,7 @@ Common protocol-level error codes:
 - `INVALID_CARD_SELECTION`
 - `DUPLICATE_SUBMISSION`
 - `STATE_CONFLICT`
+- `RATE_LIMITED`
 - `INTERNAL_ERROR`
 
 Error handling notes:

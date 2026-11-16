@@ -831,3 +831,33 @@ def test_ws_reconnect_timeout_task_emits_removed_timeout(monkeypatch):
     assert removed_event["room_id"] == str(room_id)
     assert removed_event["payload"]["player_id"] == str(player_id)
     assert removed_event["payload"]["reason"] == "reconnect_timeout"
+
+
+def test_ws_reaction_is_broadcast_and_rate_limited(client):
+    """Reactions reach everyone in the room; a second one within the cooldown is refused."""
+    ws_rooms_router._last_reaction_at.clear()
+    host_token = _register_and_get_access_token(client, "ws_react_host")
+    guest_token = _register_and_get_access_token(client, "ws_react_guest")
+    room_id, room_code = _create_private_room_with_code(client, host_token)
+    _join_room(client, guest_token, room_code, "roompass")
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={host_token}") as host_socket:
+        host_sync = _consume_bootstrap(host_socket)
+        host_player_id = _get_player_id(host_sync, "ws_react_host")
+        with client.websocket_connect(f"/ws/rooms/{room_id}?token={guest_token}") as guest_socket:
+            _consume_bootstrap(guest_socket)
+            assert host_socket.receive_json()["event"] == "room.player_joined"
+
+            host_socket.send_json({"event": "room.reaction", "payload": {"reaction_id": "oh_come_on"}})
+            for sock in (host_socket, guest_socket):
+                event = _receive_next_matching_event(sock, "room.reaction", {"room.player_joined"})
+                assert event["payload"] == {"player_id": host_player_id, "reaction_id": "oh_come_on"}
+
+            host_socket.send_json({"event": "room.reaction", "payload": {"reaction_id": "gg"}})
+            limited = host_socket.receive_json()
+            assert limited["event"] == "error"
+            assert limited["payload"]["code"] == "RATE_LIMITED"
+
+            host_socket.send_json({"event": "room.reaction", "payload": {"reaction_id": "free text!"}})
+            invalid = host_socket.receive_json()
+            assert invalid["payload"]["code"] == "INVALID_PAYLOAD"

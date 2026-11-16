@@ -882,6 +882,54 @@ async def _handle_pick_winner(
 
 _GAME_COMMAND_HANDLERS = ("lobby.start_game", "game.submit_cards", "game.pick_winner")
 
+# Quick reactions: a fixed menu (no free text, so nothing to moderate), relayed and never stored.
+REACTION_IDS = frozenset(
+    {
+        "laugh", "fire", "grimace", "sick", "clap", "facepalm",
+        "nice_one", "oh_no", "hurry_up", "oh_come_on", "regret_nothing", "gg",
+    }
+)
+REACTION_COOLDOWN_SECONDS = 2.0
+# Last reaction time per (room, player); process-local like the rest of the socket state.
+_last_reaction_at: dict[tuple[UUID, UUID], float] = {}
+
+
+async def _handle_reaction(
+    websocket: WebSocket,
+    room_id: UUID,
+    current_user_id: UUID,
+    correlation_id: UUID | None,
+    payload: dict,
+) -> None:
+    """Validate a quick reaction, apply the per-player cooldown, and broadcast it to the room."""
+    reaction_id = payload.get("reaction_id")
+    if not isinstance(reaction_id, str) or reaction_id not in REACTION_IDS:
+        await _send_protocol_error(
+            websocket, room_id, "INVALID_PAYLOAD", "Unknown reaction", correlation_id,
+            {"event": "room.reaction"},
+        )
+        return
+    now = asyncio.get_running_loop().time()
+    key = (room_id, current_user_id)
+    last = _last_reaction_at.get(key)
+    if last is not None and now - last < REACTION_COOLDOWN_SECONDS:
+        await _send_protocol_error(
+            websocket, room_id, "RATE_LIMITED", "Too many reactions, slow down", correlation_id,
+            {"event": "room.reaction", "retry_after": round(REACTION_COOLDOWN_SECONDS - (now - last), 2)},
+        )
+        return
+    _last_reaction_at[key] = now
+    await connection_manager.broadcast_event(
+        room_id,
+        WSEvent(
+            event="room.reaction",
+            room_id=room_id,
+            correlation_id=correlation_id,
+            payload={"player_id": str(current_user_id), "reaction_id": reaction_id},
+        ).model_dump(mode="json"),
+    )
+
+
 
 async def _dispatch_game_command(
     event_name: str,
@@ -1097,6 +1145,13 @@ async def ws_room_channel(websocket: WebSocket, room_id: UUID):
                         correlation_id,
                         {"event": event_name},
                     )
+                continue
+
+            if event_name == "room.reaction":
+                await _handle_reaction(
+                    websocket, room_id, authenticated_user_id, correlation_id,
+                    incoming.get("payload", {}),
+                )
                 continue
 
             if event_name == "client.ping":
