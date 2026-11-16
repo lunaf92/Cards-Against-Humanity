@@ -10,6 +10,8 @@ import type {
   WhiteCard,
 } from '../api/types'
 import { RoomSocket, type SocketStatus } from '../ws/roomSocket'
+import { REACTION_COOLDOWN_MS, REACTION_SHOW_MS } from '../reactions'
+import { playSound, vibrate } from '../sound/sfx'
 
 export interface RoundResult {
   round_id: string
@@ -33,6 +35,10 @@ export interface Notice {
 
 interface RoomState {
   roomId: string | null
+  meId: string | null
+  // Latest reaction per player while its bubble is showing; `key` changes on every new one.
+  reactions: Record<string, { reaction_id: string; key: number }>
+  reactionReadyAt: number
   room: Room | null
   players: Player[]
   game: GameSnapshot | null
@@ -43,7 +49,8 @@ interface RoomState {
   lastResult: RoundResult | null
   gameOver: GameOver | null
   notices: Notice[]
-  connect: (roomId: string) => void
+  connect: (roomId: string, meId: string) => void
+  sendReaction: (reactionId: string) => boolean
   disconnect: () => void
   startGame: () => void
   submitCards: (cardIds: string[]) => void
@@ -58,6 +65,9 @@ let noticeSeq = 0
 
 const initial = {
   roomId: null,
+  meId: null,
+  reactions: {},
+  reactionReadyAt: 0,
   room: null,
   players: [],
   game: null,
@@ -94,10 +104,10 @@ export const useRoomStore = create<RoomState>((set, get) => {
   return {
     ...initial,
 
-    connect(roomId) {
+    connect(roomId, meId) {
       if (socket && get().roomId === roomId) return
       socket?.stop()
-      set({ ...initial, roomId })
+      set({ ...initial, roomId, meId })
       socket = new RoomSocket(roomId, {
         onEvent: (e) => get().applyEvent(e),
         onStatus: (socketStatus) => set({ socketStatus }),
@@ -124,6 +134,13 @@ export const useRoomStore = create<RoomState>((set, get) => {
       socket?.send('game.pick_winner', { round_id: game.round_id, submission_id: submissionId })
     },
     requestSync: () => void socket?.send('room.state_sync.request'),
+    // Client-side cooldown mirrors the server's 2 s limit so the tray can show it.
+    sendReaction(reactionId) {
+      if (Date.now() < get().reactionReadyAt) return false
+      if (!socket?.send('room.reaction', { reaction_id: reactionId })) return false
+      set({ reactionReadyAt: Date.now() + REACTION_COOLDOWN_MS })
+      return true
+    },
     dismissNotice: (id) => set((s) => ({ notices: s.notices.filter((n) => n.id !== id) })),
 
     // Fold one server event into local state; unknown events are ignored per protocol.
@@ -195,6 +212,10 @@ export const useRoomStore = create<RoomState>((set, get) => {
           })
           // The sync carries the exact required_count and the refilled hand.
           s.requestSync()
+          if (p.czar_id === s.meId) {
+            playSound('judge')
+            vibrate([60, 60, 60])
+          }
           return
         case 'player.hand': {
           const hand = p.hand as WhiteCard[]
@@ -226,6 +247,7 @@ export const useRoomStore = create<RoomState>((set, get) => {
               phase_expires_at: (p.judging_expires_at as string | null) ?? null,
             },
           })
+          playSound('all_in')
           return
         case 'round.timer_expired':
           notify('info', "Time's up! Cards were played automatically.")
@@ -245,6 +267,10 @@ export const useRoomStore = create<RoomState>((set, get) => {
               black_card_text: s.game && s.game.round_id === p.round_id ? s.game.black_card.text : null,
             },
           })
+          if (p.winner_player_id && p.winner_player_id === s.meId) {
+            playSound('round_win')
+            vibrate(200)
+          } else playSound('round')
           return
         }
         case 'game.over':
@@ -254,7 +280,22 @@ export const useRoomStore = create<RoomState>((set, get) => {
             gameOver: raw as unknown as GameOver,
             game: null,
           })
+          playSound('game_over')
           return
+        case 'room.reaction': {
+          const playerId = p.player_id as string
+          const key = ++noticeSeq
+          set({ reactions: { ...s.reactions, [playerId]: { reaction_id: p.reaction_id as string, key } } })
+          playSound('reaction', 0.5)
+          window.setTimeout(() => {
+            const current = get().reactions[playerId]
+            if (current?.key !== key) return
+            const rest = { ...get().reactions }
+            delete rest[playerId]
+            set({ reactions: rest })
+          }, REACTION_SHOW_MS)
+          return
+        }
         case 'player.reconnect_window_started':
           set({
             players: patchPlayer(s.players, p.player_id as string, { is_connected: false }),
@@ -280,6 +321,8 @@ export const useRoomStore = create<RoomState>((set, get) => {
         case 'error': {
           const err = raw as unknown as WSErrorPayload
           if (err.code === 'INTERNAL_ERROR') s.requestSync()
+          // The tray already enforces the cooldown; a server refusal needs no toast.
+          if (err.code === 'RATE_LIMITED') return
           notify('error', ERROR_TEXT[err.code] ?? err.message)
           return
         }

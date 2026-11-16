@@ -1,6 +1,7 @@
 import type { Player } from '../api/types'
 import { useCountdown } from '../hooks/useCountdown'
 import { useRoomStore } from '../stores/roomStore'
+import { ReactionBubble } from './Reactions'
 
 interface Props {
   players: Player[]
@@ -51,6 +52,7 @@ function PlayerRow({
   const left = useCountdown(player.is_connected ? null : deadline)
   return (
     <li className={player.is_connected ? 'player' : 'player offline'}>
+      <ReactionBubble playerId={player.player_id} />
       <span className="avatar" aria-hidden>
         {player.username.slice(0, 1).toUpperCase()}
       </span>

@@ -4,6 +4,8 @@ import { CardZoom, type ZoomItem } from '../components/CardZoom'
 import { PlayerList } from '../components/PlayerList'
 import { useCountdown } from '../hooks/useCountdown'
 import { useRoomStore } from '../stores/roomStore'
+import { AvatarRow, MuteButton, ReactionButton } from '../components/Reactions'
+import { playSound } from '../sound/sfx'
 
 const RESULT_SHOW_MS = 4500
 const ORDINALS = ['1st', '2nd', '3rd']
@@ -16,6 +18,11 @@ export default function GameView({ meId }: { meId: string }) {
   const submitCards = useRoomStore((s) => s.submitCards)
   const pickWinner = useRoomStore((s) => s.pickWinner)
   const secondsLeft = useCountdown(game.phase_expires_at)
+
+  // Tick through the last 5 seconds of any timed phase.
+  useEffect(() => {
+    if (secondsLeft !== null && secondsLeft > 0 && secondsLeft <= 5) playSound('tick', 0.5)
+  }, [secondsLeft])
 
   const [selection, setSelection] = useState<string[]>([])
   const [played, setPlayed] = useState<{ round: string; ids: string[] } | null>(null)
@@ -51,6 +58,7 @@ export default function GameView({ meId }: { meId: string }) {
   }, [lastResult])
 
   function play(ids: string[]) {
+    playSound('play')
     submitCards(ids)
     setPlayed({ round: game.round_id, ids })
     setSelection([])
@@ -84,14 +92,27 @@ export default function GameView({ meId }: { meId: string }) {
   return (
     <main className="screen game">
       <header className="game-top">
-        <span className="round-label">Round {game.round_number}</span>
-        <span className={secondsLeft !== null && secondsLeft <= 10 ? 'timer urgent' : 'timer'}>
-          {secondsLeft !== null ? `${secondsLeft}s` : ''}
+        <span className="round-label">
+          Round {game.round_number}
+          <span className={secondsLeft !== null && secondsLeft <= 10 ? 'timer urgent' : 'timer'}>
+            {secondsLeft !== null ? `${secondsLeft}s` : ''}
+          </span>
         </span>
-        <button className="btn ghost small" onClick={() => setShowScores(true)}>
-          Scores
-        </button>
+        <div className="top-actions">
+          <MuteButton />
+          <ReactionButton />
+          <button className="btn ghost small" onClick={() => setShowScores(true)}>
+            Scores
+          </button>
+        </div>
       </header>
+
+      <AvatarRow
+        players={players}
+        meId={meId}
+        czarId={game.czar_id}
+        submittedIds={judging ? [] : game.submitted_player_ids}
+      />
 
       <section className="prompt-area">
         <Card

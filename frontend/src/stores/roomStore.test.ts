@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WSEnvelope } from '../api/types'
 import { useRoomStore } from './roomStore'
 
@@ -72,5 +72,21 @@ describe('roomStore.applyEvent', () => {
     expect(s.room?.status).toBe('finished')
     expect(s.gameOver?.reason).toBe('not_enough_players')
     expect(s.game).toBeNull()
+  })
+
+  it('shows a reaction bubble per player and hides it after a while', () => {
+    vi.useFakeTimers()
+    const apply = useRoomStore.getState().applyEvent
+    apply(ev('room.reaction', { player_id: 'u2', reaction_id: 'oh_come_on' }))
+    expect(useRoomStore.getState().reactions.u2?.reaction_id).toBe('oh_come_on')
+    vi.advanceTimersByTime(3000)
+    expect(useRoomStore.getState().reactions.u2).toBeUndefined()
+    vi.useRealTimers()
+  })
+
+  it('does not toast rate-limit errors', () => {
+    const before = useRoomStore.getState().notices.length
+    useRoomStore.getState().applyEvent(ev('error', { code: 'RATE_LIMITED', message: 'slow down' }))
+    expect(useRoomStore.getState().notices.length).toBe(before)
   })
 })

@@ -19,11 +19,13 @@ export default function RoomPage() {
   const fatalError = useRoomStore((s) => s.fatalError)
   const me = useAuthStore((s) => s.user)
 
+  const meId = me?.id
+
   useEffect(() => {
-    if (!roomId) return
-    connect(roomId)
+    if (!roomId || !meId) return
+    connect(roomId, meId)
     return () => disconnect()
-  }, [roomId, connect, disconnect])
+  }, [roomId, meId, connect, disconnect])
 
   if (fatalError) {
     return (

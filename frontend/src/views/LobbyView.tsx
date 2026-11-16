@@ -6,6 +6,7 @@ import { useCountdown } from '../hooks/useCountdown'
 import { useRoomStore } from '../stores/roomStore'
 import { Stepper } from '../pages/HomePage'
 import { PlayerList } from '../components/PlayerList'
+import { MuteButton, ReactionButton } from '../components/Reactions'
 
 const MIN_PLAYERS = 3
 
@@ -54,7 +55,11 @@ export default function LobbyView({ meId }: { meId: string }) {
         <button className="btn ghost small" onClick={() => navigate('/')}>
           ← Home
         </button>
-        <span className="muted">{isRandom ? 'Random match' : 'Private room'}</span>
+        <span className="muted grow center">{isRandom ? 'Random match' : 'Private room'}</span>
+        <div className="top-actions">
+          <MuteButton />
+          <ReactionButton />
+        </div>
       </header>
 
       {!isRandom && (

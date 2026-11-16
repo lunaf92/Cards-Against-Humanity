@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { playSound } from '../sound/sfx'
 
 export interface ZoomItem {
   key: string
@@ -18,6 +19,8 @@ interface Props {
 export function CardZoom({ items, startIndex, onClose, renderActions, header }: Props) {
   const track = useRef<HTMLDivElement>(null)
   const [index, setIndex] = useState(startIndex)
+
+  useEffect(() => playSound('zoom', 0.6), [])
 
   useLayoutEffect(() => {
     const el = track.current
