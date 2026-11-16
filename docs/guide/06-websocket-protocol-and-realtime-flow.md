@@ -161,11 +161,32 @@ If player reconnects in time:
 - state sync sent
 - `player.reconnected` broadcast
 
-If timeout expires:
+If timeout expires (`_run_reconnect_timeout` in `app/routers/ws_rooms.py`,
+`RoomService.handle_player_timeout`):
 
-- player removed from room
-- hand removed from Redis
-- host transfer / czar-skip logic applied when needed
+- the task first checks the player has no live socket and the Redis marker still
+  exists. The marker's TTL is the window plus a 30 s grace
+  (`RECONNECT_WINDOW_KEY_GRACE_SECONDS`): with an equal TTL the key had always
+  expired by the time the task woke up and nobody was ever removed
+- player removed from room, hand removed from Redis
+- host role handed over (`room.host_changed`) when the host left
+- fewer than 3 players left in a running game: room is `finished` and
+  `game.over` (`reason = "not_enough_players"`) is broadcast
+- the leaver's pending submission is dropped; if everyone remaining has already
+  submitted the round moves to judging (`round.judging`)
+- the czar left during submissions: round skipped, hands topped up, next
+  `round.started`
+
+The window length is `RECONNECT_WINDOW_SECONDS` (default 60).
+
+### Delivery guarantees inside the process
+
+- `RoomConnectionManager` sends to each socket independently: a socket that
+  died without a clean close can no longer abort a broadcast for the rest of the
+  room or raise into the sender's command handler.
+- Timer tasks and command handlers log unexpected exceptions; a failing command
+  yields an `INTERNAL_ERROR` event instead of closing the player's socket.
+- After a process restart `restore_game_timers` re-arms round/judging timers.
 
 This provides practical resilience to transient network issues while still guaranteeing eventual cleanup.
 
@@ -183,7 +204,7 @@ sequenceDiagram
 	WS->>S: mark_player_connection_state(False)
 	S->>DB: Update room_players.is_connected
 	WS->>S: start_reconnect_window(room_id, player_id)
-	S->>R: SETEX reconnect_window:{room}:{player} 60
+	S->>R: SETEX reconnect_window:{room}:{player} 60+30
 	WS-->>All: player.reconnect_window_started
 
 	alt reconnect within 60s

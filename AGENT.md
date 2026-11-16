@@ -9,12 +9,12 @@ Project-level operating rules for all contributors and coding agents working on 
 - **Phase 1** (Backend Foundation) — ✅ Complete
 - **Phase 2** (REST API — Cards & Rooms) — ✅ Complete
 - **Phase 3** (WebSockets & Game Engine) — ✅ Complete
-- **Phase 4** (Frontend Foundation) — Not started
-- **Phase 5** (Frontend Lobby & Matchmaking) — Not started
-- **Phase 6** (Frontend Gameplay) — Not started
+- **Phase 4** (Frontend Foundation) — ✅ Complete (web, React + Vite)
+- **Phase 5** (Frontend Lobby & Matchmaking) — ✅ Complete
+- **Phase 6** (Frontend Gameplay) — ✅ Complete
 - **Phase 7** (Polish & NFRs) — Not started
 
-Backend services (FastAPI, PostgreSQL, Redis) are fully operational and tested. The frontend has not been scaffolded yet.
+Backend services (FastAPI, PostgreSQL, Redis) are fully operational and tested. The web frontend lives in `frontend/`.
 
 ## Repository Structure
 
@@ -26,7 +26,7 @@ Backend services (FastAPI, PostgreSQL, Redis) are fully operational and tested. 
 ├── scripts/             # Seed and utility scripts
 ├── docs/                # Developer guide, protocol reference, roadmap, known risks
 ├── .envs/               # Environment files for compose services
-├── frontend/            # Expo/React Native app (Phase 4+, not yet created)
+├── frontend/            # React + Vite web app
 └── docker-compose.yml
 ```
 
@@ -51,34 +51,25 @@ If a needed Docker command is missing, add it to project docs/scripts before con
 
 ## Frontend Execution Policy
 
-- Frontend (`frontend/`) is an Expo app; run it with `npx expo start` from inside the `frontend/` directory.
-- The backend must be running via `docker compose up` for any frontend integration flows.
-- Do not add the frontend as a Docker Compose service unless explicitly decided.
-- Frontend environment: base API URL is read from `EXPO_PUBLIC_API_URL` in `frontend/.env`.
+**Decided (2026-11)**: the frontend is a browser web app (React + Vite + TypeScript), not Expo/React Native. v1 target is friends playing in a browser on a self-hosted server; no app-store release.
+
+- Run it from `frontend/`: `npm install`, then `npm run dev` (http://localhost:5173). The backend must be running via `docker compose up`.
+- The app only talks to same-origin `/api` (REST, prefix stripped) and `/ws` (room sockets). Vite proxies both to `BACKEND_URL` (default `http://localhost:8000`) in dev; the reverse proxy does the same in production. Override with `VITE_API_BASE` / `VITE_WS_BASE` only if they live on another origin.
+- Checks before committing: `npx tsc -b`, `npm run lint`, `npm test`, `npm run build`.
 
 ## Frontend State Management
 
 **Decided**: use **Zustand** for all shared client state. Do not introduce Redux.
 
-- Stores: `authStore`, `roomStore`, `gameStore`.
-- Token storage via a cross-platform `secureStorage` abstraction (`src/utils/secureStorage.ts`): expo-secure-store on native, sessionStorage on web. Never call either directly — always use the abstraction.
+- Stores: `authStore` (session) and `roomStore` (room, players, game, socket). Server events are folded into state in `roomStore.applyEvent`; add new events there.
+- Tokens live in `src/api/tokenStorage.ts` (localStorage, guarded). Never touch storage directly.
+- `src/ws/roomSocket.ts` owns the socket: pings every 25 s, reconnects with backoff, refreshes the access token on close code 4401, and stops on 4403/4404. The server re-sends `room.state_sync` on every connect.
 
 ## Frontend Platform Target
 
-**Decided**: iOS, Android, and web. Build mobile-first, web-compatible from the start.
-
-- Do not use native-only APIs without a web fallback.
-- Use `Pressable` everywhere; avoid platform-specific touch primitives.
-- Web production build (`npx expo export --platform web`) produces a static bundle served by nginx. A Compose service for this will be added in Phase 7.
-- Check the web target with `npx expo start --web` at the end of every phase.
-
-## Frontend Open Decisions (resolve before Phase 5)
-
-- Confirm `EXPO_PUBLIC_API_URL` for local dev (typically `http://localhost:8000` on simulator/web, or the host LAN IP for physical device testing).
-
-## Frontend Tooling Decisions (locked)
-
-- **Expo Go** for development. All libraries in Phases 4–6 are Expo Go compatible. If a future library requires a native module outside Expo Go's set, migrate to a dev build via `eas build --profile development` at that point. The migration is a one-time reinstall with no code changes required.
+- Mobile-first, works on desktop browsers. Test at phone width (e.g. Playwright `devices['iPhone 13']`).
+- Card interaction: tap a card to open the zoom viewer (`components/CardZoom.tsx`), swipe between cards, act from there.
+- Card visuals are original; do not copy art or branding from any published game.
 
 ## Testing and Regression Policy
 
@@ -98,8 +89,8 @@ If a needed Docker command is missing, add it to project docs/scripts before con
 
 ### Frontend Tests
 
-- Use **jest** + **@testing-library/react-native** for unit and component tests.
-- Run from `frontend/`: `npx jest`
+- Use **vitest** + **@testing-library/react** for unit and component tests.
+- Run from `frontend/`: `npm test`
 - Test what the user sees and can interact with; do not test implementation details.
 - Mock the WebSocket and API client in unit tests; use real backend for end-to-end validation.
 
@@ -143,7 +134,7 @@ If a needed Docker command is missing, add it to project docs/scripts before con
 
 A task is complete only when all are true:
 
-1. Implementation works (backend: in Docker; frontend: in Expo).
+1. Implementation works (backend: in Docker; frontend: in the browser at phone width).
 2. Relevant tests are added/updated and pass.
 3. Regression risk is covered by tests.
 4. Swagger/OpenAPI docs are accurate (for backend changes).
@@ -152,7 +143,7 @@ A task is complete only when all are true:
 
 ## PR Checklist
 
-- [ ] Runs fully (backend: Docker/Compose; frontend: Expo)
+- [ ] Runs fully (backend: Docker/Compose; frontend: `npm run dev` + browser)
 - [ ] Tests added early and passing
 - [ ] Regression tests included where needed
 - [ ] Backward compatibility reviewed

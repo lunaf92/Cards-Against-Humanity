@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -15,23 +16,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import database
 from app.core.config import settings
 from app.core.security import decode_token
-from app.models import GameRound, Room, Submission, User
+from app.models import Card, GameRound, Room, Submission, User
 from app.schemas.ws import WSEvent
 from app.services.auth import AuthService
+from app.services.decks import DeckService
 from app.services.rooms import RECONNECT_WINDOW_TTL, RoomGameError, RoomService
 from app.services.ws_connection_manager import connection_manager
 
 router = APIRouter(tags=["ws"])
+logger = logging.getLogger(__name__)
 
 # NOTE: these task registries are process-local. Timers and reconnect windows only
-# work while the app runs as a single process (see docs/FUTURE_WORK.md).
+# work while the app runs as a single process (see
+# docs/known-risks-and-technical-debt.md §1).
 _reconnect_timeout_tasks: dict[tuple[UUID, UUID], asyncio.Task] = {}
 _round_timer_tasks: dict[tuple[UUID, UUID], asyncio.Task] = {}
 _judging_timer_tasks: dict[tuple[UUID, UUID], asyncio.Task] = {}
+# Wall-clock deadline of the running submission/judging timer per round, so a
+# state sync can tell a (re)connecting client how long the current phase has left.
+_phase_deadlines: dict[tuple[UUID, UUID], datetime] = {}
 
 
 def _cancel_round_timer_task(room_id: UUID, round_id: UUID) -> None:
     """Cancel scheduled round timer task if present."""
+    _phase_deadlines.pop((room_id, round_id), None)
     task = _round_timer_tasks.pop((room_id, round_id), None)
     if task is not None and not task.done():
         task.cancel()
@@ -40,6 +48,7 @@ def _cancel_round_timer_task(room_id: UUID, round_id: UUID) -> None:
 def _schedule_round_timer_task(room_id: UUID, round_id: UUID, duration_seconds: int) -> None:
     """Cancel any existing round timer and schedule a fresh one."""
     _cancel_round_timer_task(room_id, round_id)
+    _phase_deadlines[(room_id, round_id)] = datetime.now(UTC) + timedelta(seconds=duration_seconds)
     _round_timer_tasks[(room_id, round_id)] = asyncio.create_task(
         _run_round_timer(room_id, round_id, duration_seconds)
     )
@@ -47,6 +56,7 @@ def _schedule_round_timer_task(room_id: UUID, round_id: UUID, duration_seconds: 
 
 def _cancel_judging_timer_task(room_id: UUID, round_id: UUID) -> None:
     """Cancel scheduled judging timer task if present."""
+    _phase_deadlines.pop((room_id, round_id), None)
     task = _judging_timer_tasks.pop((room_id, round_id), None)
     if task is not None and not task.done():
         task.cancel()
@@ -55,6 +65,7 @@ def _cancel_judging_timer_task(room_id: UUID, round_id: UUID) -> None:
 def _schedule_judging_timer_task(room_id: UUID, round_id: UUID, duration_seconds: int) -> None:
     """Cancel any existing judging timer and schedule a fresh one."""
     _cancel_judging_timer_task(room_id, round_id)
+    _phase_deadlines[(room_id, round_id)] = datetime.now(UTC) + timedelta(seconds=duration_seconds)
     _judging_timer_tasks[(room_id, round_id)] = asyncio.create_task(
         _run_judging_timer(room_id, round_id, duration_seconds)
     )
@@ -108,6 +119,85 @@ async def _broadcast_round_started(
         ).model_dump(mode="json"),
     )
     _schedule_round_timer_task(room_id, round_obj.id, round_timer_seconds)
+    await _send_player_hands(room_id, round_obj.id)
+
+
+async def _send_player_hands(room_id: UUID, round_id: UUID) -> None:
+    """Send each connected player their private hand (id + text) for the new round.
+
+    Hands are per-player secrets, so this is a personal event rather than part of
+    the round.started broadcast. Failures are logged, never raised: clients can
+    always recover the hand through room.state_sync.
+    """
+    try:
+        redis_client = redis.from_url(settings.REDIS_URL)
+        try:
+            async with database.async_session() as db:
+                for user_id in connection_manager.connected_user_ids(room_id):
+                    hand_cards = await RoomService.get_player_hand_cards(
+                        db, redis_client, room_id, user_id
+                    )
+                    await connection_manager.send_personal_event(
+                        room_id,
+                        user_id,
+                        WSEvent(
+                            event="player.hand",
+                            room_id=room_id,
+                            payload={"round_id": str(round_id), "hand": hand_cards},
+                        ).model_dump(mode="json"),
+                    )
+        finally:
+            await redis_client.aclose()
+    except Exception:
+        logger.exception("failed to send player hands for room %s", room_id)
+
+
+async def _broadcast_round_judging(
+    room_id: UUID,
+    round_id: UUID,
+    submissions: list[dict],
+    round_timer_seconds: int,
+) -> None:
+    """Broadcast round.judging and start the czar's judging timer."""
+    _cancel_round_timer_task(room_id, round_id)
+    judging_expires_at = datetime.now(UTC) + timedelta(seconds=round_timer_seconds)
+    await connection_manager.broadcast_event(
+        room_id,
+        WSEvent(
+            event="round.judging",
+            room_id=room_id,
+            payload={
+                "round_id": str(round_id),
+                "submissions": submissions,
+                "judging_expires_at": judging_expires_at,
+            },
+        ).model_dump(mode="json"),
+    )
+    _schedule_judging_timer_task(room_id, round_id, round_timer_seconds)
+
+
+async def _broadcast_game_over(
+    room_id: UUID,
+    scoreboard: list,
+    winner_player_id: UUID | None,
+    reason: str,
+) -> None:
+    """Broadcast game.over with the final scoreboard and why the game ended."""
+    await connection_manager.broadcast_event(
+        room_id,
+        WSEvent(
+            event="game.over",
+            room_id=room_id,
+            payload={
+                "winner_player_id": str(winner_player_id) if winner_player_id else None,
+                "reason": reason,
+                "scoreboard": [
+                    {"player_id": str(item.player_id), "score": item.score}
+                    for item in scoreboard
+                ],
+            },
+        ).model_dump(mode="json"),
+    )
 
 
 async def _broadcast_pick_winner_outcome(
@@ -140,22 +230,11 @@ async def _broadcast_pick_winner_outcome(
     )
 
     if outcome["game_winner"] is not None:
-        await connection_manager.broadcast_event(
+        await _broadcast_game_over(
             room_id,
-            WSEvent(
-                event="game.over",
-                room_id=room_id,
-                payload={
-                    "winner_player_id": str(outcome["game_winner"].player_id),
-                    "scoreboard": [
-                        {
-                            "player_id": str(item.player_id),
-                            "score": item.score,
-                        }
-                        for item in outcome["scoreboard"]
-                    ],
-                },
-            ).model_dump(mode="json"),
+            outcome["scoreboard"],
+            outcome["game_winner"].player_id,
+            "winning_score_reached",
         )
         return
 
@@ -175,23 +254,27 @@ async def _run_round_timer(room_id: UUID, round_id: UUID, duration_seconds: int)
     """
     try:
         await asyncio.sleep(duration_seconds)
+        _phase_deadlines.pop((room_id, round_id), None)
         redis_client = redis.from_url(settings.REDIS_URL)
         try:
             judging_submissions = None
             next_round_started = None
+            game_over_scoreboard = None
             round_timer_seconds = duration_seconds
             async with database.async_session() as db:
+                # Lock the room first, then read the round, so the status check
+                # cannot race a submission that is committing right now.
+                room = await _get_room_for_update(db, room_id)
+                if room is None or room.status != "in_progress":
+                    return
+                round_timer_seconds = room.round_timer_seconds
+
                 round_result = await db.execute(
                     select(GameRound).where(GameRound.id == round_id, GameRound.room_id == room_id)
                 )
                 round_obj = round_result.scalar_one_or_none()
                 if round_obj is None or round_obj.status != "waiting":
                     return
-
-                room = await _get_room_for_update(db, room_id)
-                if room is None or room.status != "in_progress":
-                    return
-                round_timer_seconds = room.round_timer_seconds
 
                 # Find players who haven't submitted yet (excluding czar)
                 submitted_ids_result = await db.execute(
@@ -205,9 +288,13 @@ async def _run_round_timer(room_id: UUID, round_id: UUID, duration_seconds: int)
                     if player.player_id != round_obj.czar_id and player.player_id not in submitted_ids
                 ]
 
+                # Auto-submit as many cards as the black card asks for (pick 2/3 too).
+                black_card = await db.get(Card, round_obj.black_card_id)
+                pick_count = 1 if black_card is None else int(black_card.pick)
+
                 for player_id in pending_player_ids:
                     hand = await RoomService.get_player_hand(redis_client, room_id, player_id)
-                    if not hand:
+                    if len(hand) < pick_count:
                         continue
                     try:
                         await RoomService.submit_cards(
@@ -215,7 +302,7 @@ async def _run_round_timer(room_id: UUID, round_id: UUID, duration_seconds: int)
                             room,
                             player_id,
                             round_id,
-                            hand[:1],
+                            hand[:pick_count],
                             redis_client,
                         )
                     except RoomGameError:
@@ -244,6 +331,9 @@ async def _run_round_timer(room_id: UUID, round_id: UUID, duration_seconds: int)
                             )
                         except RoomGameError:
                             room.status = "finished"
+                            game_over_scoreboard = await RoomService._ordered_room_player_rows(
+                                db, room_id
+                            )
 
                 if round_obj.status == "judging":
                     judging_submissions = await RoomService._round_submission_payload(db, round_id)
@@ -260,51 +350,50 @@ async def _run_round_timer(room_id: UUID, round_id: UUID, duration_seconds: int)
             )
 
             if judging_submissions is not None:
-                await connection_manager.broadcast_event(
-                    room_id,
-                    WSEvent(
-                        event="round.judging",
-                        room_id=room_id,
-                        payload={
-                            "round_id": str(round_id),
-                            "submissions": judging_submissions,
-                        },
-                    ).model_dump(mode="json"),
+                await _broadcast_round_judging(
+                    room_id, round_id, judging_submissions, round_timer_seconds
                 )
-                _schedule_judging_timer_task(room_id, round_id, round_timer_seconds)
             elif next_round_started is not None:
                 next_round, next_black_card = next_round_started
                 await _broadcast_round_started(
                     room_id, next_round, next_black_card, round_timer_seconds
                 )
+            elif game_over_scoreboard is not None:
+                await _broadcast_game_over(
+                    room_id, game_over_scoreboard, None, "not_enough_players"
+                )
         finally:
             await redis_client.aclose()
     except asyncio.CancelledError:
         return
+    except Exception:
+        logger.exception("round timer failed for room %s round %s", room_id, round_id)
     finally:
-        _round_timer_tasks.pop((room_id, round_id), None)
+        if _round_timer_tasks.get((room_id, round_id)) is asyncio.current_task():
+            _round_timer_tasks.pop((room_id, round_id), None)
 
 
 async def _run_judging_timer(room_id: UUID, round_id: UUID, duration_seconds: int) -> None:
     """Pick a random winner when the czar fails to judge before the timer expires."""
     try:
         await asyncio.sleep(duration_seconds)
+        _phase_deadlines.pop((room_id, round_id), None)
         redis_client = redis.from_url(settings.REDIS_URL)
         try:
             outcome = None
             round_timer_seconds = duration_seconds
             async with database.async_session() as db:
+                room = await _get_room_for_update(db, room_id)
+                if room is None or room.status != "in_progress":
+                    return
+                round_timer_seconds = room.round_timer_seconds
+
                 round_result = await db.execute(
                     select(GameRound).where(GameRound.id == round_id, GameRound.room_id == room_id)
                 )
                 round_obj = round_result.scalar_one_or_none()
                 if round_obj is None or round_obj.status != "judging":
                     return
-
-                room = await _get_room_for_update(db, room_id)
-                if room is None or room.status != "in_progress":
-                    return
-                round_timer_seconds = room.round_timer_seconds
 
                 submissions_result = await db.execute(
                     select(Submission).where(Submission.round_id == round_id)
@@ -322,7 +411,8 @@ async def _run_judging_timer(room_id: UUID, round_id: UUID, duration_seconds: in
                         random.choice(submissions).id,
                         redis_client,
                     )
-                except RoomGameError:
+                except RoomGameError as exc:
+                    logger.warning("judging auto-pick failed for round %s: %s", round_id, exc)
                     await db.rollback()
                     return
                 await db.commit()
@@ -342,17 +432,24 @@ async def _run_judging_timer(room_id: UUID, round_id: UUID, duration_seconds: in
             await redis_client.aclose()
     except asyncio.CancelledError:
         return
+    except Exception:
+        logger.exception("judging timer failed for room %s round %s", room_id, round_id)
     finally:
-        _judging_timer_tasks.pop((room_id, round_id), None)
+        if _judging_timer_tasks.get((room_id, round_id)) is asyncio.current_task():
+            _judging_timer_tasks.pop((room_id, round_id), None)
 
 
 async def _run_reconnect_timeout(room_id: UUID, player_id: UUID) -> None:
-    """Emit timeout removal event when reconnect window expires."""
+    """Remove a player who is still disconnected when the reconnect window expires."""
     try:
         await asyncio.sleep(RECONNECT_WINDOW_TTL)
         redis_client = redis.from_url(settings.REDIS_URL)
         try:
-            still_disconnected = await RoomService.is_player_in_reconnect_window(
+            # A live socket always wins; the Redis marker covers the case where
+            # the window was cleared by a reconnect this task did not observe.
+            still_disconnected = not connection_manager.has_user_connections(
+                room_id, player_id
+            ) and await RoomService.is_player_in_reconnect_window(
                 redis_client,
                 room_id,
                 player_id,
@@ -383,11 +480,38 @@ async def _run_reconnect_timeout(room_id: UUID, player_id: UUID) -> None:
                 ).model_dump(mode="json"),
             )
 
-            if timeout_outcome["czar_timed_out"] and timeout_outcome["next_round"] is not None:
+            host_changed = timeout_outcome.get("host_changed")
+            if host_changed is not None:
+                await connection_manager.broadcast_event(
+                    room_id,
+                    WSEvent(
+                        event="room.host_changed",
+                        room_id=room_id,
+                        payload={
+                            "previous_host_id": str(host_changed["previous_host_id"]),
+                            "new_host_id": str(host_changed["new_host_id"]),
+                        },
+                    ).model_dump(mode="json"),
+                )
+
+            round_timer_seconds = int(
+                timeout_outcome.get("round_timer_seconds") or RECONNECT_WINDOW_TTL
+            )
+            if timeout_outcome.get("game_over"):
+                await _broadcast_game_over(
+                    room_id, timeout_outcome["scoreboard"], None, "not_enough_players"
+                )
+            elif timeout_outcome.get("judging_submissions") is not None:
+                await _broadcast_round_judging(
+                    room_id,
+                    timeout_outcome["judging_round_id"],
+                    timeout_outcome["judging_submissions"],
+                    round_timer_seconds,
+                )
+            elif timeout_outcome["czar_timed_out"] and timeout_outcome["next_round"] is not None:
                 next_round = timeout_outcome["next_round"]
                 next_black_card = timeout_outcome["next_black_card"]
                 skipped_round_id = timeout_outcome.get("skipped_round_id")
-                round_timer_seconds = int(timeout_outcome.get("round_timer_seconds") or RECONNECT_WINDOW_TTL)
                 if skipped_round_id is not None:
                     _cancel_round_timer_task(room_id, skipped_round_id)
                     _cancel_judging_timer_task(room_id, skipped_round_id)
@@ -399,8 +523,34 @@ async def _run_reconnect_timeout(room_id: UUID, player_id: UUID) -> None:
             await redis_client.aclose()
     except asyncio.CancelledError:
         return
+    except Exception:
+        logger.exception("reconnect timeout failed for room %s player %s", room_id, player_id)
     finally:
-        _reconnect_timeout_tasks.pop((room_id, player_id), None)
+        if _reconnect_timeout_tasks.get((room_id, player_id)) is asyncio.current_task():
+            _reconnect_timeout_tasks.pop((room_id, player_id), None)
+
+
+async def restore_game_timers() -> int:
+    """Re-arm round/judging timers for games that were mid-round when the process stopped.
+
+    Timers are in-process tasks, so a restart (deploy, crash, --reload) would
+    otherwise leave active rounds without any timer. Each active round gets a
+    fresh full-length timer. Returns the number of timers scheduled.
+    """
+    restored = 0
+    async with database.async_session() as db:
+        result = await db.execute(
+            select(GameRound, Room)
+            .join(Room, GameRound.room_id == Room.id)
+            .where(Room.status == "in_progress", GameRound.status.in_(("waiting", "judging")))
+        )
+        for round_obj, room in result.all():
+            if round_obj.status == "waiting":
+                _schedule_round_timer_task(room.id, round_obj.id, room.round_timer_seconds)
+            else:
+                _schedule_judging_timer_task(room.id, round_obj.id, room.round_timer_seconds)
+            restored += 1
+    return restored
 
 
 async def _send_error(websocket: WebSocket, room_id: UUID, code: str, message: str, details: dict | None = None):
@@ -419,19 +569,19 @@ async def _send_error(websocket: WebSocket, room_id: UUID, code: str, message: s
 
 
 def _safe_uuid(value: str | None) -> UUID | None:
-    """Parse UUID values safely for optional correlation IDs."""
-    if value is None:
+    """Parse UUID values safely; anything that is not a UUID string yields None."""
+    if not isinstance(value, str):
         return None
 
     try:
         return UUID(value)
-    except (TypeError, ValueError):
+    except ValueError:
         return None
 
 
 def _safe_uuid_list(values: list[str] | None) -> list[UUID] | None:
     """Parse list of UUID strings safely for command payload validation."""
-    if values is None:
+    if not isinstance(values, list):
         return None
 
     parsed: list[UUID] = []
@@ -484,6 +634,10 @@ async def _build_room_state_payload(
     room_obj = room_result.scalar_one()
 
     players = await RoomService.list_room_players(db, room_id)
+    game = await RoomService.build_game_state(db, room_id, redis_client, current_user_id)
+    if game is not None:
+        # Deadline of the running submission/judging timer (null if none is armed).
+        game["phase_expires_at"] = _phase_deadlines.get((room_id, UUID(game["round_id"])))
     return {
         "room": {
             "id": str(room_obj.id),
@@ -494,11 +648,14 @@ async def _build_room_state_payload(
             "max_players": room_obj.max_players,
             "winning_score": room_obj.winning_score,
             "round_timer_seconds": room_obj.round_timer_seconds,
-            "card_pool_mode": room_obj.card_pool_mode,
+            "decks": [
+                {**deck, "id": str(deck["id"]), "owner_id": str(deck["owner_id"]) if deck["owner_id"] else None}
+                for deck in await DeckService.room_decks(db, room_id)
+            ],
             "matchmaking_fill_expires_at": room_obj.matchmaking_fill_expires_at,
         },
         "players": players,
-        "game": await RoomService.build_game_state(db, room_id, redis_client, current_user_id),
+        "game": game,
     }
 
 
@@ -647,19 +804,9 @@ async def _handle_submit_cards(
         round_timer_seconds = room.round_timer_seconds
 
     if outcome["transition"] == "judging":
-        _cancel_round_timer_task(room_id, outcome["round"].id)
-        await connection_manager.broadcast_event(
-            room_id,
-            WSEvent(
-                event="round.judging",
-                room_id=room_id,
-                payload={
-                    "round_id": str(outcome["round"].id),
-                    "submissions": outcome["submissions"],
-                },
-            ).model_dump(mode="json"),
+        await _broadcast_round_judging(
+            room_id, outcome["round"].id, outcome["submissions"], round_timer_seconds
         )
-        _schedule_judging_timer_task(room_id, outcome["round"].id, round_timer_seconds)
         return
 
     await connection_manager.broadcast_event(
@@ -737,6 +884,95 @@ async def _handle_pick_winner(
     )
 
 
+_GAME_COMMAND_HANDLERS = ("lobby.start_game", "game.submit_cards", "game.pick_winner")
+
+# Quick reactions: a fixed menu (no free text, so nothing to moderate), relayed and never stored.
+REACTION_IDS = frozenset(
+    {
+        "laugh", "fire", "grimace", "sick", "clap", "facepalm",
+        "nice_one", "oh_no", "hurry_up", "oh_come_on", "regret_nothing", "gg",
+    }
+)
+REACTION_COOLDOWN_SECONDS = 2.0
+# Last reaction time per (room, player); process-local like the rest of the socket state.
+_last_reaction_at: dict[tuple[UUID, UUID], float] = {}
+
+
+async def _handle_reaction(
+    websocket: WebSocket,
+    room_id: UUID,
+    current_user_id: UUID,
+    correlation_id: UUID | None,
+    payload: dict,
+) -> None:
+    """Validate a quick reaction, apply the per-player cooldown, and broadcast it to the room."""
+    reaction_id = payload.get("reaction_id")
+    if not isinstance(reaction_id, str) or reaction_id not in REACTION_IDS:
+        await _send_protocol_error(
+            websocket, room_id, "INVALID_PAYLOAD", "Unknown reaction", correlation_id,
+            {"event": "room.reaction"},
+        )
+        return
+    now = asyncio.get_running_loop().time()
+    key = (room_id, current_user_id)
+    last = _last_reaction_at.get(key)
+    if last is not None and now - last < REACTION_COOLDOWN_SECONDS:
+        await _send_protocol_error(
+            websocket, room_id, "RATE_LIMITED", "Too many reactions, slow down", correlation_id,
+            {"event": "room.reaction", "retry_after": round(REACTION_COOLDOWN_SECONDS - (now - last), 2)},
+        )
+        return
+    _last_reaction_at[key] = now
+    await connection_manager.broadcast_event(
+        room_id,
+        WSEvent(
+            event="room.reaction",
+            room_id=room_id,
+            correlation_id=correlation_id,
+            payload={"player_id": str(current_user_id), "reaction_id": reaction_id},
+        ).model_dump(mode="json"),
+    )
+
+
+
+async def _dispatch_game_command(
+    event_name: str,
+    websocket: WebSocket,
+    redis_client,
+    room_id: UUID,
+    current_user_id: UUID,
+    correlation_id: UUID | None,
+    payload: dict,
+) -> None:
+    """Route one state-changing client command to its handler."""
+    if event_name == "lobby.start_game":
+        await _handle_start_game(
+            websocket=websocket,
+            redis_client=redis_client,
+            room_id=room_id,
+            current_user_id=current_user_id,
+            correlation_id=correlation_id,
+        )
+    elif event_name == "game.submit_cards":
+        await _handle_submit_cards(
+            websocket=websocket,
+            redis_client=redis_client,
+            room_id=room_id,
+            current_user_id=current_user_id,
+            correlation_id=correlation_id,
+            payload=payload,
+        )
+    elif event_name == "game.pick_winner":
+        await _handle_pick_winner(
+            websocket=websocket,
+            redis_client=redis_client,
+            room_id=room_id,
+            current_user_id=current_user_id,
+            correlation_id=correlation_id,
+            payload=payload,
+        )
+
+
 @router.websocket("/ws/rooms/{room_id}")
 async def ws_room_channel(websocket: WebSocket, room_id: UUID):
     """Handle authenticated room channel session and baseline protocol commands.
@@ -792,8 +1028,9 @@ async def ws_room_channel(websocket: WebSocket, room_id: UUID):
                 room_id,
                 authenticated_user_id,
             )
+            # Always cancel: the removal task must never fire for a connected player.
+            _cancel_reconnect_timeout_task(room_id, authenticated_user_id)
             if was_in_reconnect_window:
-                _cancel_reconnect_timeout_task(room_id, authenticated_user_id)
                 await RoomService.clear_reconnect_window(redis_client, room_id, authenticated_user_id)
                 await connection_manager.broadcast_event(
                     room_id,
@@ -866,9 +1103,60 @@ async def ws_room_channel(websocket: WebSocket, room_id: UUID):
                 )
 
         while True:
-            incoming = await websocket.receive_json()
+            try:
+                incoming = await websocket.receive_json()
+            except (ValueError, KeyError):
+                # Non-JSON or binary frame: report it instead of dropping the socket.
+                await _send_protocol_error(
+                    websocket, room_id, "INVALID_PAYLOAD", "Message must be a JSON object", None
+                )
+                continue
+
+            if not isinstance(incoming, dict) or not isinstance(incoming.get("payload", {}), dict):
+                await _send_protocol_error(
+                    websocket,
+                    room_id,
+                    "INVALID_PAYLOAD",
+                    "Message must be a JSON object with an object payload",
+                    None,
+                )
+                continue
+
             event_name = incoming.get("event")
             correlation_id = _safe_uuid(incoming.get("correlation_id"))
+
+            if event_name in _GAME_COMMAND_HANDLERS:
+                # A failing command must not tear down the player's connection.
+                try:
+                    await _dispatch_game_command(
+                        event_name,
+                        websocket,
+                        redis_client,
+                        room_id,
+                        authenticated_user_id,
+                        correlation_id,
+                        incoming.get("payload", {}),
+                    )
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    raise
+                except Exception:
+                    logger.exception("command %s failed in room %s", event_name, room_id)
+                    await _send_protocol_error(
+                        websocket,
+                        room_id,
+                        "INTERNAL_ERROR",
+                        "Command failed, request room.state_sync to resynchronize",
+                        correlation_id,
+                        {"event": event_name},
+                    )
+                continue
+
+            if event_name == "room.reaction":
+                await _handle_reaction(
+                    websocket, room_id, authenticated_user_id, correlation_id,
+                    incoming.get("payload", {}),
+                )
+                continue
 
             if event_name == "client.ping":
                 pong_event = WSEvent(
@@ -900,38 +1188,6 @@ async def ws_room_channel(websocket: WebSocket, room_id: UUID):
                 await websocket.send_json(sync_event.model_dump(mode="json"))
                 continue
 
-            if event_name == "lobby.start_game":
-                await _handle_start_game(
-                    websocket=websocket,
-                    redis_client=redis_client,
-                    room_id=room_id,
-                    current_user_id=authenticated_user_id,
-                    correlation_id=correlation_id,
-                )
-                continue
-
-            if event_name == "game.submit_cards":
-                await _handle_submit_cards(
-                    websocket=websocket,
-                    redis_client=redis_client,
-                    room_id=room_id,
-                    current_user_id=authenticated_user_id,
-                    correlation_id=correlation_id,
-                    payload=incoming.get("payload", {}),
-                )
-                continue
-
-            if event_name == "game.pick_winner":
-                await _handle_pick_winner(
-                    websocket=websocket,
-                    redis_client=redis_client,
-                    room_id=room_id,
-                    current_user_id=authenticated_user_id,
-                    correlation_id=correlation_id,
-                    payload=incoming.get("payload", {}),
-                )
-                continue
-
             error_event = WSEvent(
                 event="error",
                 room_id=room_id,
@@ -946,6 +1202,9 @@ async def ws_room_channel(websocket: WebSocket, room_id: UUID):
 
     except WebSocketDisconnect:
         pass
+    except RuntimeError as exc:
+        # Starlette raises RuntimeError when sending on a socket that already closed.
+        logger.warning("websocket for room %s closed mid-send: %s", room_id, exc)
     finally:
         if connected_user_id is not None:
             disconnected_user = connection_manager.disconnect(room_id, connected_user_id, websocket)

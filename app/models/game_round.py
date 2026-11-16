@@ -15,7 +15,7 @@ class GameRound(Base):
     room_id = Column(PG_UUID(as_uuid=True), ForeignKey("rooms.id"), nullable=False)
     round_number = Column(Integer, nullable=False)
     czar_id = Column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    black_card_id = Column(PG_UUID(as_uuid=True), ForeignKey("cards.id"), nullable=False)
+    black_card_id = Column(PG_UUID(as_uuid=True), ForeignKey("cards.id", ondelete="SET NULL"), nullable=True)
     status = Column(
         Enum("waiting", "judging", "complete", name="round_status"),
         nullable=False,

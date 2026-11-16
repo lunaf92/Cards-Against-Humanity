@@ -6,13 +6,6 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-CardPoolMode = Literal[
-    "default_only",
-    "host_custom_only",
-    "host_custom_mixed",
-    "all_custom_only",
-    "all_custom_mixed",
-]
 RoomKind = Literal["private", "random"]
 RoomStatus = Literal["lobby", "matchmaking_lobby", "in_progress", "finished"]
 
@@ -24,7 +17,8 @@ class RoomCreateRequest(BaseModel):
     max_players: int = Field(default=10, ge=2, le=10)
     winning_score: int = Field(default=8, ge=3, le=20)
     round_timer_seconds: int = Field(default=90, ge=30, le=300)
-    card_pool_mode: CardPoolMode = "default_only"
+    # Decks to deal from; omitted means the default built-in packs.
+    deck_ids: list[UUID] | None = Field(default=None, min_length=1)
 
 
 class RoomJoinRequest(BaseModel):
@@ -40,7 +34,19 @@ class RoomConfigUpdateRequest(BaseModel):
     max_players: int | None = Field(default=None, ge=2, le=10)
     winning_score: int | None = Field(default=None, ge=3, le=20)
     round_timer_seconds: int | None = Field(default=None, ge=30, le=300)
-    card_pool_mode: CardPoolMode | None = None
+    deck_ids: list[UUID] | None = Field(default=None, min_length=1)
+
+
+class RoomDeckSummary(BaseModel):
+    """A deck a room deals from."""
+
+    id: UUID
+    name: str
+    is_builtin: bool
+    is_public: bool
+    owner_id: UUID | None = None
+    black_count: int
+    white_count: int
 
 
 class RoomPlayerResponse(BaseModel):
@@ -64,7 +70,7 @@ class RoomResponse(BaseModel):
     max_players: int
     winning_score: int
     round_timer_seconds: int
-    card_pool_mode: CardPoolMode
+    decks: list[RoomDeckSummary] = []
     matchmaking_fill_expires_at: datetime | None
     created_at: datetime
 
@@ -90,3 +96,9 @@ class QueueLeaveResponse(BaseModel):
     """Leave queue response payload."""
 
     removed: bool
+
+
+class ActiveRoomResponse(BaseModel):
+    """The caller's current unfinished room, or null when they are in none."""
+
+    room: RoomDetailsResponse | None

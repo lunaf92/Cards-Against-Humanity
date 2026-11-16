@@ -10,8 +10,7 @@ from app.core.dependencies import security
 from app.core.security import decode_token
 from app.services.auth import AuthService
 from app.schemas.auth import LoginRequest, TokenPair, RefreshTokenRequest, TokenResponse
-from app.schemas.user import UserCreate, UserResponse
-from app.models import User
+from app.schemas.user import UserCreate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

@@ -10,6 +10,8 @@ Protocol source of truth:
 ## WebSocket Endpoint
 
 - `GET /ws/rooms/{room_id}?token=<access_jwt>`
+- The token is a query parameter because browsers cannot set headers on a
+  WebSocket; see "Browser clients" in the protocol reference.
 
 ## Common Envelope
 
@@ -35,7 +37,7 @@ All messages follow `WSEvent` from [../../app/schemas/ws.py](../../app/schemas/w
 | `room.state_sync` | ws router | connect bootstrap or explicit sync request | `room`, `players`, `game` |
 | `room.player_joined` | ws router | first active socket for user in room | `player` snapshot |
 | `room.player_left` | ws router | disconnect in lobby/matchmaking_lobby | `player_id`, `reason` |
-| `room.host_changed` | room service + ws router | host disconnect in lobby-style room | `previous_host_id`, `new_host_id` |
+| `room.host_changed` | room service + ws router | host disconnects in a lobby-style room while another player is connected, or host is removed by reconnect timeout | `previous_host_id`, `new_host_id` |
 | `matchmaking.match_found` | ws router | random lobby connection established | `room_id`, `player_count` |
 | `matchmaking.countdown_started` | worker/ws | matchmaking threshold reached | `expires_at`, `seconds_remaining`, `player_count` |
 | `matchmaking.countdown_reset` | rooms router | player joins existing open countdown room | `expires_at`, `seconds_remaining`, `player_count` |
@@ -43,11 +45,13 @@ All messages follow `WSEvent` from [../../app/schemas/ws.py](../../app/schemas/w
 | `matchmaking.locked` | worker or ws start path | countdown expiry, room full, or host-start random lobby | `reason`, `player_count` |
 | `game.started` | ws router | start_game succeeds | `started_at`, `round_number`, `players` |
 | `round.started` | ws router | initial round, next round, or czar-timeout skip | `round_id`, `round_number`, `czar_id`, `black_card`, `round_expires_at` |
+| `player.hand` | ws router (personal) | right after every `round.started` | `round_id`, `hand[] {id, text}` |
 | `round.submission_accepted` | ws router | one valid submission accepted, round still waiting | `round_id`, `player_id`, `submitted_count`, `required_count` |
 | `round.timer_expired` | ws round timer task | round timer reaches expiry | `round_id` |
-| `round.judging` | ws router/timer task | all submissions available | `round_id`, `submissions` |
+| `round.judging` | ws router/timer task | all submissions available | `round_id`, `submissions`, `judging_expires_at` |
+| `round.judging_expired` | ws judging timer task | czar did not pick in time; random winner follows | `round_id`, `reason` |
 | `round.result` | ws router | czar picked winner | `round_id`, `winner_player_id`, `winning_submission_id`, `scores` |
-| `game.over` | ws router | winner reached winning score | `winner_player_id`, `scoreboard` |
+| `game.over` | ws router / timeout task | winner reached winning score, or fewer than 3 players remain | `winner_player_id` (nullable), `reason`, `scoreboard` |
 | `player.reconnect_window_started` | ws router | disconnect detected | `player_id`, `expires_at`, `seconds_remaining` |
 | `player.reconnected` | ws router | reconnect within window | `player_id` |
 | `player.removed_timeout` | reconnect timeout task | reconnect window expired | `player_id`, `reason` |
@@ -66,6 +70,7 @@ All messages follow `WSEvent` from [../../app/schemas/ws.py](../../app/schemas/w
 - `game.started` precedes the first `round.started`
 - `round.result` is always sent before next `round.started` in non-terminal rounds
 - on reconnect success, expect `player.reconnected` broadcast and fresh `room.state_sync` for reconnecting client
+- `player.hand` follows `round.started`; `room.state_sync.game` (`hand_cards`, `has_submitted`, `submissions`, `phase_expires_at`) is enough to redraw the whole table after a page reload
 
 ## QA Smoke Script (Minimal)
 

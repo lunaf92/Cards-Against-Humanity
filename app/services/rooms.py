@@ -11,16 +11,21 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import hash_password, verify_password
 from app.models import Card, GameRound, Room, RoomPlayer, Submission, User
 from app.schemas.room import RoomConfigUpdateRequest, RoomCreateRequest, RoomJoinRequest
+from app.services.decks import DeckService
 
 MATCHMAKING_QUEUE_KEY = "matchmaking:queue"
 GAME_WHITE_DECK_KEY = "game:{room_id}:white_deck"
 GAME_BLACK_DECK_KEY = "game:{room_id}:black_deck"
 GAME_PLAYER_HAND_KEY = "game:{room_id}:hand:{user_id}"
 RECONNECT_WINDOW_KEY = "reconnect_window:{room_id}:{player_id}"
-RECONNECT_WINDOW_TTL = 60
+RECONNECT_WINDOW_TTL = settings.RECONNECT_WINDOW_SECONDS
+# The Redis marker must outlive the in-process timeout task that reads it; with an
+# equal TTL the key had always expired by the time the task woke up.
+RECONNECT_WINDOW_KEY_GRACE_SECONDS = 30
 # Safety-net expiry so abandoned games cannot leak Redis keys forever.
 GAME_STATE_TTL_SECONDS = 24 * 60 * 60
 
@@ -142,10 +147,11 @@ class RoomService:
 
     @staticmethod
     async def _select_white_cards_for_room(db: AsyncSession, room: Room) -> list[UUID]:
-        """Select white-card pool for room dealing; currently default-only."""
+        """White-card pool for room dealing: every white card in the room's decks."""
+        pool = await DeckService.card_filter(db, room.id)
         result = await db.execute(
             select(Card.id)
-            .where(Card.type == "white", Card.is_default.is_(True))
+            .where(Card.type == "white", pool)
             .order_by(Card.created_at.asc(), Card.id.asc())
         )
         return [card_id for (card_id,) in result.all()]
@@ -197,8 +203,20 @@ class RoomService:
         return remaining_hand
 
     @staticmethod
-    async def _refill_player_hands(redis_client, room_id: UUID, player_ids: list[UUID]) -> dict[UUID, list[UUID]]:
-        """Draw from deck until each listed player is back to 10 white cards."""
+    async def _refill_player_hands(
+        redis_client,
+        room_id: UUID,
+        player_ids: list[UUID],
+        db: AsyncSession | None = None,
+        room: Room | None = None,
+    ) -> dict[UUID, list[UUID]]:
+        """Draw from deck until each listed player is back to 10 white cards.
+
+        `player_ids` must be the full room roster. When the deck runs short and a
+        db/room is supplied, already-played cards are reshuffled back in; if the
+        pool is still too small, hands are refilled as far as possible instead of
+        failing the czar's pick and stalling the game.
+        """
         hands_by_player = {
             player_id: await RoomService.get_player_hand(redis_client, room_id, player_id)
             for player_id in player_ids
@@ -206,16 +224,21 @@ class RoomService:
         deck = await RoomService.get_white_deck(redis_client, room_id)
 
         total_needed = sum(max(0, 10 - len(hand)) for hand in hands_by_player.values())
-        if len(deck) < total_needed:
-            raise RoomGameError(
-                "STATE_CONFLICT",
-                "Not enough white cards to refill hands",
-                {"required": total_needed, "available": len(deck)},
-            )
+        if len(deck) < total_needed and db is not None and room is not None:
+            in_use = set(deck)
+            for hand in hands_by_player.values():
+                in_use.update(hand)
+            discards = [
+                card_id
+                for card_id in await RoomService._select_white_cards_for_room(db, room)
+                if card_id not in in_use
+            ]
+            random.shuffle(discards)
+            deck = deck + discards
 
         for player_id, hand in hands_by_player.items():
             missing = 10 - len(hand)
-            if missing <= 0:
+            if missing <= 0 or not deck:
                 continue
 
             drawn_cards = deck[:missing]
@@ -234,7 +257,8 @@ class RoomService:
         deck = await RoomService._redis_json_get(redis_client, key)
         while True:
             if not deck:
-                result = await db.execute(select(Card.id).where(Card.type == "black"))
+                pool = await DeckService.card_filter(db, room_id)
+                result = await db.execute(select(Card.id).where(Card.type == "black", pool))
                 deck = [card_id for (card_id,) in result.all()]
                 if not deck:
                     raise RoomGameError(
@@ -292,7 +316,9 @@ class RoomService:
         submissions_result = await db.execute(
             select(Submission).where(Submission.round_id == round_id)
         )
-        submissions = submissions_result.scalars().all()
+        # Submission ids are random UUIDs: ordering by id hides submit order (keeps
+        # authorship anonymous) yet stays stable across repeated state syncs.
+        submissions = sorted(submissions_result.scalars().all(), key=lambda item: str(item.id))
 
         all_white_card_ids = {
             card_id
@@ -311,8 +337,19 @@ class RoomService:
             }
             for item in submissions
         ]
-        random.shuffle(payload)
         return payload
+
+    @staticmethod
+    async def get_player_hand_cards(
+        db: AsyncSession, redis_client, room_id: UUID, user_id: UUID
+    ) -> list[dict]:
+        """Return a player's hand as id+text entries so clients can render it directly."""
+        hand = await RoomService.get_player_hand(redis_client, room_id, user_id)
+        if not hand:
+            return []
+        cards_result = await db.execute(select(Card.id, Card.text).where(Card.id.in_(hand)))
+        text_by_id = {card_id: text for card_id, text in cards_result.all()}
+        return [{"id": str(card_id), "text": text_by_id.get(card_id, "")} for card_id in hand]
 
     @staticmethod
     async def build_game_state(
@@ -336,10 +373,15 @@ class RoomService:
             return None
 
         black_card = await db.get(Card, active_round.black_card_id)
-        submitted_count_result = await db.execute(
-            select(func.count()).select_from(Submission).where(Submission.round_id == active_round.id)
-        )
-        submitted_count = int(submitted_count_result.scalar_one())
+        submitted_player_ids = [
+            player_id
+            for (player_id,) in (
+                await db.execute(
+                    select(Submission.player_id).where(Submission.round_id == active_round.id)
+                )
+            ).all()
+        ]
+        submitted_count = len(submitted_player_ids)
         required_count_result = await db.execute(
             select(func.count()).select_from(RoomPlayer).where(
                 RoomPlayer.room_id == room_id,
@@ -355,6 +397,8 @@ class RoomService:
             "czar_id": str(active_round.czar_id),
             "submitted_count": submitted_count,
             "required_count": required_count,
+            "submitted_player_ids": [str(player_id) for player_id in submitted_player_ids],
+            "has_submitted": current_user_id in submitted_player_ids,
             "black_card": None,
         }
         if black_card is not None:
@@ -368,12 +412,31 @@ class RoomService:
             payload["submissions"] = await RoomService._round_submission_payload(db, active_round.id)
 
         if redis_client is not None and current_user_id is not None:
-            payload["hand"] = [
-                str(card_id)
-                for card_id in await RoomService.get_player_hand(redis_client, room_id, current_user_id)
-            ]
+            hand_cards = await RoomService.get_player_hand_cards(
+                db, redis_client, room_id, current_user_id
+            )
+            payload["hand"] = [card["id"] for card in hand_cards]
+            payload["hand_cards"] = hand_cards
 
         return payload
+
+    @staticmethod
+    async def _check_card_pool(db: AsyncSession, room: Room, players_count: int) -> None:
+        """Refuse to start when the chosen decks cannot deal a game."""
+        pool = await DeckService.card_filter(db, room.id)
+        result = await db.execute(select(Card.type, func.count()).where(pool).group_by(Card.type))
+        counts = {"black": 0, "white": 0, **dict(result.all())}
+        required_white = players_count * 10
+        if counts["black"] < 1 or counts["white"] < required_white:
+            raise RoomGameError(
+                "STATE_CONFLICT",
+                f"The chosen decks need at least 1 black and {required_white} white cards",
+                {
+                    "black_available": counts["black"],
+                    "white_available": counts["white"],
+                    "white_required": required_white,
+                },
+            )
 
     @staticmethod
     async def start_game(db: AsyncSession, room: Room, current_user_id: UUID, redis_client) -> dict:
@@ -381,7 +444,17 @@ class RoomService:
         if room.host_id != current_user_id:
             raise RoomGameError("NOT_HOST", "Only host can start the game", {"event": "lobby.start_game"})
 
-        if room.status not in ("lobby", "matchmaking_lobby"):
+        max_round_result = await db.execute(
+            select(func.max(GameRound.round_number)).where(GameRound.room_id == room.id)
+        )
+        current_round = max_round_result.scalar_one()
+
+        # The matchmaking worker locks a random lobby by flipping it to in_progress
+        # without dealing; such a room (no rounds yet) must still be startable.
+        is_locked_matchmaking_room = (
+            room.room_kind == "random" and room.status == "in_progress" and current_round is None
+        )
+        if room.status not in ("lobby", "matchmaking_lobby") and not is_locked_matchmaking_room:
             raise RoomGameError(
                 "STATE_CONFLICT",
                 "Room is not in a startable state",
@@ -396,10 +469,8 @@ class RoomService:
                 {"player_count": players_count},
             )
 
-        max_round_result = await db.execute(
-            select(func.max(GameRound.round_number)).where(GameRound.room_id == room.id)
-        )
-        current_round = max_round_result.scalar_one()
+        await RoomService._check_card_pool(db, room, players_count)
+
         next_round_number = 1 if current_round is None else int(current_round) + 1
         czar_id = await RoomService._next_czar_id(db, room.id)
 
@@ -571,10 +642,10 @@ class RoomService:
             )
         )
         winning_player = player_result.scalar_one_or_none()
-        if winning_player is None:
-            raise RoomGameError("STATE_CONFLICT", "Winning player not found in room")
-
-        winning_player.score += 1
+        # The author may have been removed (reconnect timeout) after submitting.
+        # The round still resolves — nobody scores — instead of wedging in judging.
+        if winning_player is not None:
+            winning_player.score += 1
         round_obj.status = "complete"
 
         scoreboard = await RoomService._ordered_room_player_rows(db, room.id)
@@ -605,6 +676,8 @@ class RoomService:
             redis_client,
             room.id,
             [player.player_id for player in scoreboard],
+            db,
+            room,
         )
         next_round, next_black_card = await RoomService._create_round(
             db,
@@ -649,10 +722,11 @@ class RoomService:
             max_players=payload.max_players,
             winning_score=payload.winning_score,
             round_timer_seconds=payload.round_timer_seconds,
-            card_pool_mode=payload.card_pool_mode,
         )
         db.add(room)
         await db.flush()
+        if payload.deck_ids is not None:
+            await DeckService.set_room_decks(db, room, payload.deck_ids, host_user.id)
 
         db.add(
             RoomPlayer(
@@ -704,6 +778,11 @@ class RoomService:
                 await db.flush()
             return room
 
+        if room.status == "finished":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Game has already finished"
+            )
+
         player_count = await RoomService._room_player_count(db, room.id)
         if player_count >= room.max_players:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Room is full")
@@ -719,6 +798,18 @@ class RoomService:
         )
         await db.flush()
         return room
+
+    @staticmethod
+    async def get_active_room_for_user(db: AsyncSession, user_id: UUID) -> Room | None:
+        """Return the newest unfinished room the user belongs to (resume after reload/matchmaking)."""
+        result = await db.execute(
+            select(Room)
+            .join(RoomPlayer, RoomPlayer.room_id == Room.id)
+            .where(RoomPlayer.player_id == user_id, Room.status != "finished")
+            .order_by(Room.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     @staticmethod
     async def get_room_for_member(db: AsyncSession, room_id: UUID, user_id: UUID) -> Room:
@@ -843,16 +934,19 @@ class RoomService:
             .where(
                 RoomPlayer.room_id == room_id,
                 RoomPlayer.player_id != user_id,
+                RoomPlayer.is_connected.is_(True),
             )
             .order_by(RoomPlayer.join_order.asc())
             .limit(1)
         )
         next_host_id = next_host_result.scalar_one_or_none()
         previous_host_id = room.host_id
-        room.host_id = next_host_id
-        await db.flush()
-
+        # Only hand the room to someone who is actually online. With nobody else
+        # connected the host keeps the role, so a page refresh by a lone host no
+        # longer leaves the room hostless (and therefore unstartable).
         if next_host_id is not None:
+            room.host_id = next_host_id
+            await db.flush()
             result["host_changed"] = {
                 "previous_host_id": previous_host_id,
                 "new_host_id": next_host_id,
@@ -875,9 +969,15 @@ class RoomService:
             "next_black_card": None,
             "skipped_round_id": None,
             "round_timer_seconds": None,
+            "host_changed": None,
+            "game_over": False,
+            "scoreboard": None,
+            "judging_round_id": None,
+            "judging_submissions": None,
         }
 
-        room_result = await db.execute(select(Room).where(Room.id == room_id))
+        # Lock the room row so removal serializes with in-flight game commands.
+        room_result = await db.execute(select(Room).where(Room.id == room_id).with_for_update())
         room = room_result.scalar_one_or_none()
         if room is None:
             return result
@@ -897,13 +997,19 @@ class RoomService:
         await redis_client.delete(RoomService._player_hand_key(room_id, player_id))
 
         if room.host_id == player_id:
+            # Prefer a connected successor, fall back to the earliest joiner.
             next_host_result = await db.execute(
                 select(RoomPlayer.player_id)
                 .where(RoomPlayer.room_id == room_id)
-                .order_by(RoomPlayer.join_order.asc())
+                .order_by(RoomPlayer.is_connected.desc(), RoomPlayer.join_order.asc())
                 .limit(1)
             )
             room.host_id = next_host_result.scalar_one_or_none()
+            if room.host_id is not None:
+                result["host_changed"] = {
+                    "previous_host_id": player_id,
+                    "new_host_id": room.host_id,
+                }
 
         if room.status != "in_progress":
             await db.flush()
@@ -911,7 +1017,14 @@ class RoomService:
 
         players = await RoomService._ordered_room_player_rows(db, room_id)
         if len(players) < 3:
+            # Too few players to continue: end the game explicitly so clients get
+            # a game.over instead of a silently finished room.
             room.status = "finished"
+            result["game_over"] = True
+            result["scoreboard"] = players
+            await RoomService.cleanup_game_state(
+                redis_client, room_id, [player.player_id for player in players]
+            )
             await db.flush()
             return result
 
@@ -927,6 +1040,28 @@ class RoomService:
             return result
 
         if current_round.czar_id != player_id:
+            # Drop the leaver's pending submission; if everyone still in the room
+            # has already played, move on to judging instead of idling until the
+            # round timer fires.
+            await db.execute(
+                Submission.__table__.delete().where(
+                    Submission.round_id == current_round.id,
+                    Submission.player_id == player_id,
+                )
+            )
+            submitted_count_result = await db.execute(
+                select(func.count())
+                .select_from(Submission)
+                .where(Submission.round_id == current_round.id)
+            )
+            submitted_count = int(submitted_count_result.scalar_one())
+            required_count = len(players) - 1
+            if required_count > 0 and submitted_count >= required_count:
+                current_round.status = "judging"
+                result["judging_round_id"] = current_round.id
+                result["judging_submissions"] = await RoomService._round_submission_payload(
+                    db, current_round.id
+                )
             await db.flush()
             return result
 
@@ -937,6 +1072,10 @@ class RoomService:
         # Drop any pending submissions from timed-out round and move to next czar.
         await db.execute(
             Submission.__table__.delete().where(Submission.round_id == current_round.id)
+        )
+        # Players who already played into the skipped round get their hand topped up.
+        await RoomService._refill_player_hands(
+            redis_client, room_id, [player.player_id for player in players], db, room
         )
 
         next_czar_id = await RoomService._next_czar_id(db, room_id, current_round.czar_id)
@@ -989,8 +1128,8 @@ class RoomService:
         if payload.round_timer_seconds is not None:
             room.round_timer_seconds = payload.round_timer_seconds
 
-        if payload.card_pool_mode is not None:
-            room.card_pool_mode = payload.card_pool_mode
+        if payload.deck_ids is not None:
+            await DeckService.set_room_decks(db, room, payload.deck_ids, host_user_id)
 
         await db.flush()
         return room
@@ -1208,13 +1347,15 @@ class RoomService:
 
     @staticmethod
     async def start_reconnect_window(redis_client, room_id: UUID, player_id: UUID) -> dict:
-        """Start a 60-second reconnect window for a disconnected player. Return event payload."""
+        """Start the reconnect window for a disconnected player. Return event payload."""
         key = RECONNECT_WINDOW_KEY.format(room_id=room_id, player_id=player_id)
         now = datetime.now(UTC).replace(tzinfo=None)
         expires_at = now + timedelta(seconds=RECONNECT_WINDOW_TTL)
-        
-        await redis_client.setex(key, RECONNECT_WINDOW_TTL, "1")
-        
+
+        await redis_client.setex(
+            key, RECONNECT_WINDOW_TTL + RECONNECT_WINDOW_KEY_GRACE_SECONDS, "1"
+        )
+
         return {
             "player_id": str(player_id),
             "expires_at": expires_at,

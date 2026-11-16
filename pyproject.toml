@@ -10,7 +10,7 @@ packages = [{include = "app"}]
 python = "^3.13"
 fastapi = "^0.104.1"
 uvicorn = {extras = ["standard"], version = "^0.24.0"}
-sqlalchemy = "^2.0.23"
+sqlalchemy = {extras = ["asyncio"], version = "~2.0.23"}
 alembic = "^1.13.1"
 psycopg2-binary = "^2.9.9"
 asyncpg = "^0.30.0"
@@ -38,7 +38,9 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+# The pinned ruff (0.1.x) predates py313 and refuses to start with it; py312 is
+# the newest target it knows. Raise this together with the ruff version.
+target-version = "py312"
 
 [tool.black]
 line-length = 100

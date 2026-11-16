@@ -3,7 +3,7 @@
 Cross-platform multiplayer card game backend built with FastAPI, PostgreSQL, and Redis.
 
 The backend is complete: auth, cards, rooms, random matchmaking, and the
-real-time WebSocket game engine. Next up is the frontend (Expo / React Native) — see
+real-time WebSocket game engine. A mobile-first web frontend (React + Vite) lives in `frontend/` — see
 [docs/development-roadmap.md](docs/development-roadmap.md) for the roadmap.
 
 ## Tech Stack
@@ -75,7 +75,8 @@ Open browser to `http://localhost:8000/docs` for interactive Swagger UI.
 
 ```bash
 # 1. Seed the default card deck
-docker compose run --rm backend python scripts/seed_cards.py
+docker compose run --rm backend python -m scripts.seed_cards
+# safe to rerun; --list shows the packs, --packs a,b picks them
 
 # 2. Run tests
 docker compose run --rm backend pytest tests/ -v
@@ -143,7 +144,11 @@ Key variables:
 - `JWT_SECRET_KEY`: Secret for signing tokens (change in production!)
 - `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL (default 24h; lower for production)
 - `JWT_REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token TTL (default 30d)
-- `CORS_ORIGINS`: JSON list of allowed origins
+- `CORS_ORIGINS`: JSON list of allowed browser origins for the REST API, e.g.
+  `["http://localhost:5173"]` for a Vite dev server, plus the public origin when
+  served behind a reverse proxy
+- `RECONNECT_WINDOW_SECONDS`: how long a disconnected player may reconnect before
+  being removed from the room (default 60)
 
 ## Documentation
 
@@ -153,7 +158,20 @@ Key variables:
 - [docs/guide/](docs/guide/README.md) — full developer guide (architecture, protocol, onboarding)
 - [docs/product-requirements.md](docs/product-requirements.md) — functional requirements
 
-## Next: Frontend (Phase 4+)
+## Frontend
 
-Expo / React Native app consuming this API. Start with auth + API client
-(implementation-plan.md Phase 4), then lobby/matchmaking (Phase 5), then gameplay (Phase 6).
+Mobile-first web app in `frontend/` (React + Vite + TypeScript, Zustand).
+
+```bash
+docker compose up -d          # backend, worker, Postgres, Redis
+cd frontend
+npm install
+npm run dev                   # http://localhost:5173, also reachable on your LAN
+npm test                      # unit tests
+```
+
+The app calls same-origin `/api` and `/ws`; Vite proxies them to the backend in dev.
+
+## Self-hosting
+
+Production stack with Caddy (automatic HTTPS): see [docs/deployment.md](docs/deployment.md).

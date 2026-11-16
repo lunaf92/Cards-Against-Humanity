@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import app.core.database as database_module
 from app.main import app
 from app.core.database import get_db
-from app.models import Card, GameRound, Room, RoomPlayer, Submission, TokenRevocation, User
+from app.models import Card, Deck, DeckMember, RoomDeck, GameRound, Room, RoomPlayer, Submission, TokenRevocation, User
 
 
 @pytest_asyncio.fixture
@@ -22,8 +22,11 @@ async def test_db():
             tables=[
                 User.__table__,
                 TokenRevocation.__table__,
+                Deck.__table__,
+                DeckMember.__table__,
                 Card.__table__,
                 Room.__table__,
+                RoomDeck.__table__,
                 RoomPlayer.__table__,
                 GameRound.__table__,
                 Submission.__table__,

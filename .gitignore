@@ -54,3 +54,4 @@ htmlcov/
 
 # Docker
 docker-compose.override.yml
+!.envs/.env.prod.example

@@ -1,7 +1,6 @@
 """RoomPlayer model for tracking players in rooms."""
 from sqlalchemy import Column, Integer, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from datetime import datetime
 import uuid
 
 from app.models.base import Base

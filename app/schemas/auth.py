@@ -1,6 +1,5 @@
 """Authentication schemas for request/response validation."""
 from pydantic import BaseModel
-from typing import Optional
 
 
 class TokenPair(BaseModel):

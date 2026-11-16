@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models import User
 from app.schemas.room import (
+    ActiveRoomResponse,
     QueueLeaveResponse,
     QueueResponse,
     RoomConfigUpdateRequest,
@@ -18,6 +19,7 @@ from app.schemas.room import (
     RoomJoinRequest,
     RoomResponse,
 )
+from app.services.decks import DeckService
 from app.services.rooms import RoomService
 from app.schemas.ws import WSEvent
 from app.services.ws_connection_manager import connection_manager
@@ -29,6 +31,7 @@ async def _build_room_details(db: AsyncSession, room) -> RoomDetailsResponse:
     """Shape room plus player list into API response model."""
     players = await RoomService.list_room_players(db, room.id)
     room_data = RoomResponse.model_validate(room).model_dump()
+    room_data["decks"] = await DeckService.room_decks(db, room.id)
     return RoomDetailsResponse(**room_data, players=players)
 
 
@@ -112,6 +115,18 @@ async def leave_matchmaking_queue(current_user: User = Depends(get_current_user)
         await redis_client.close()
 
 
+@router.get("/active", response_model=ActiveRoomResponse)
+async def get_active_room(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the caller's newest unfinished room so clients can resume or detect a match."""
+    room = await RoomService.get_active_room_for_user(db, current_user.id)
+    if room is None:
+        return ActiveRoomResponse(room=None)
+    return ActiveRoomResponse(room=await _build_room_details(db, room))
+
+
 @router.get("/{room_id}", response_model=RoomDetailsResponse)
 async def get_room_details(
     room_id: UUID,
@@ -139,4 +154,14 @@ async def update_room_config(
     )
     await db.commit()
     await db.refresh(room)
-    return await _build_room_details(db, room)
+    details = await _build_room_details(db, room)
+    # Non-host clients only learn about setting changes through the room socket.
+    await connection_manager.broadcast_event(
+        room.id,
+        WSEvent(
+            event="room.config_updated",
+            room_id=room.id,
+            payload={"room": details.model_dump(mode="json", exclude={"players"})},
+        ).model_dump(mode="json"),
+    )
+    return details

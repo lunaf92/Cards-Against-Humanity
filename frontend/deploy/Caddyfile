@@ -1,0 +1,25 @@
+# SITE_ADDRESS decides how the site is served:
+#   a domain (cah.example.com)  -> automatic HTTPS via Let's Encrypt (ports 80 and 443 must reach this box)
+#   :80                         -> plain HTTP on any IP/hostname (LAN or testing)
+{$SITE_ADDRESS::80} {
+	encode gzip
+
+	# REST API: strip the /api prefix, the backend routes live at the root.
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# Room WebSockets; Caddy forwards the Upgrade headers and keeps idle sockets open.
+	handle /ws/* {
+		reverse_proxy backend:8000
+	}
+
+	# Single-page app: unknown paths fall back to index.html so deep links like /room/<id> work.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+}

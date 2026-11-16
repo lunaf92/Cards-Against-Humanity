@@ -14,6 +14,7 @@ import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 ROOM_CHANNEL_PREFIX = "ws:room:"
+BRIDGE_RESTART_DELAY_SECONDS = 1.0
 
 
 class RoomConnectionManager:
@@ -48,50 +49,79 @@ class RoomConnectionManager:
             self._redis_client = None
 
     async def _run_pubsub_bridge(self) -> None:
-        """Subscribe to room channels and fan-out remote events locally."""
-        if self._redis_client is None:
+        """Subscribe to room channels and fan-out remote events locally.
+
+        The bridge is the only path for worker-published matchmaking events, so
+        it resubscribes after unexpected failures instead of dying silently.
+        """
+        while self._redis_client is not None:
+            pubsub = self._redis_client.pubsub()
+            try:
+                await pubsub.psubscribe(f"{ROOM_CHANNEL_PREFIX}*")
+                while True:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=1.0
+                    )
+                    if message is None:
+                        await asyncio.sleep(0.05)
+                        continue
+                    await self._handle_bridge_message(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive bridge guard
+                logger.exception("websocket pubsub bridge failed, restarting: %s", exc)
+                await asyncio.sleep(BRIDGE_RESTART_DELAY_SECONDS)
+            finally:
+                try:
+                    await pubsub.aclose()
+                except Exception:  # pragma: no cover - best-effort cleanup
+                    pass
+
+    async def _handle_bridge_message(self, message: dict) -> None:
+        """Fan out one pub/sub message locally; malformed messages are dropped."""
+        raw_data = message.get("data")
+        if isinstance(raw_data, bytes):
+            raw_data = raw_data.decode()
+        if not isinstance(raw_data, str):
             return
 
-        pubsub = self._redis_client.pubsub()
-        await pubsub.psubscribe(f"{ROOM_CHANNEL_PREFIX}*")
-
         try:
-            while True:
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if message is None:
-                    await asyncio.sleep(0.05)
-                    continue
+            envelope = json.loads(raw_data)
+            if not isinstance(envelope, dict) or envelope.get("source") == self._instance_id:
+                return
 
-                raw_data = message.get("data")
-                if isinstance(raw_data, bytes):
-                    raw_data = raw_data.decode()
-                if not isinstance(raw_data, str):
-                    continue
+            room_id_raw = envelope.get("room_id")
+            payload = envelope.get("payload")
+            if room_id_raw is None or not isinstance(payload, dict):
+                return
+            room_id = UUID(str(room_id_raw))
+        except ValueError:
+            logger.warning("dropping malformed pubsub message")
+            return
 
-                envelope = json.loads(raw_data)
-                if envelope.get("source") == self._instance_id:
-                    continue
+        await self._broadcast_local(room_id, payload)
 
-                room_id_raw = envelope.get("room_id")
-                payload = envelope.get("payload")
-                if room_id_raw is None or not isinstance(payload, dict):
-                    continue
-
-                room_id = UUID(str(room_id_raw))
-                await self._broadcast_local(room_id, payload)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # pragma: no cover - defensive bridge guard
-            logger.exception("websocket pubsub bridge failed: %s", exc)
-        finally:
-            await pubsub.aclose()
+    @staticmethod
+    async def _safe_send(websocket: WebSocket, payload: dict) -> bool:
+        """Send to one socket; a dead socket must never break delivery to the others."""
+        try:
+            await websocket.send_json(payload)
+            return True
+        except Exception as exc:
+            # The socket's own receive loop notices the disconnect and cleans up.
+            logger.debug("dropping event for closed websocket: %s", exc)
+            return False
 
     async def _broadcast_local(self, room_id: UUID, payload: dict) -> None:
         """Broadcast payload only to sockets connected in this process."""
-        room_connections = self._rooms.get(room_id, {})
-        for user_connections in room_connections.values():
-            for websocket in user_connections:
-                await websocket.send_json(payload)
+        # Snapshot first: sockets may connect/disconnect while sends are awaited.
+        sockets = [
+            websocket
+            for user_connections in list(self._rooms.get(room_id, {}).values())
+            for websocket in list(user_connections)
+        ]
+        for websocket in sockets:
+            await self._safe_send(websocket, payload)
 
     async def _publish_room_event(self, room_id: UUID, payload: dict) -> None:
         """Publish payload for other app instances via Redis pub/sub."""
@@ -104,7 +134,11 @@ class RoomConnectionManager:
             "room_id": str(room_id),
             "payload": payload,
         }
-        await self._redis_client.publish(channel, json.dumps(envelope, default=str))
+        try:
+            await self._redis_client.publish(channel, json.dumps(envelope, default=str))
+        except Exception as exc:
+            # Local delivery already happened; a Redis hiccup must not fail the command.
+            logger.warning("failed to publish room event to redis: %s", exc)
 
     async def connect(self, room_id: UUID, user_id: UUID, websocket: WebSocket) -> None:
         """Accept socket and register user connection for room."""
@@ -144,11 +178,12 @@ class RoomConnectionManager:
 
     async def send_personal_event(self, room_id: UUID, user_id: UUID, payload: dict) -> None:
         """Send event payload to one connected user in room."""
-        user_connections = self._rooms.get(room_id, {}).get(user_id, [])
-        if not user_connections:
-            return
-        for websocket in user_connections:
-            await websocket.send_json(payload)
+        for websocket in list(self._rooms.get(room_id, {}).get(user_id, [])):
+            await self._safe_send(websocket, payload)
+
+    def connected_user_ids(self, room_id: UUID) -> list[UUID]:
+        """Return ids of users with at least one live socket in the room."""
+        return list(self._rooms.get(room_id, {}).keys())
 
     async def broadcast_event(self, room_id: UUID, payload: dict) -> None:
         """Broadcast event payload to all connected users in room."""

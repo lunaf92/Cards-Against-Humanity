@@ -30,7 +30,7 @@ matter, instead of fixing everything up front or discovering it in production.
 
 ## Milestone 0 — Now: frontend development (implementation-plan.md Phases 4–6)
 
-Build the Expo app against the existing backend. No backend changes required to
+Build the web app (React + Vite, `frontend/`) against the existing backend. No backend changes required to
 start. Backend facts the frontend must be designed around (details in
 Known Risks §8):
 

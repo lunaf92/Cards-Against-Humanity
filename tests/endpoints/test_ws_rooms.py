@@ -110,7 +110,6 @@ def _create_private_room_with_code(
             "max_players": 6,
             "winning_score": winning_score,
             "round_timer_seconds": 90,
-            "card_pool_mode": "default_only",
         },
     )
     assert response.status_code == status.HTTP_201_CREATED
@@ -189,6 +188,7 @@ def _receive_broadcast(websockets, expected_event: str) -> list[dict]:
         "room.player_joined",
         "room.player_left",
         "room.host_changed",
+        "player.hand",
     }
     events = []
     for websocket in websockets:
@@ -473,6 +473,75 @@ def test_ws_room_ping_returns_pong_with_correlation_id(client):
         assert pong_event["correlation_id"] == correlation_id
         assert pong_event["payload"]["sent_at"] == "2026-04-26T12:30:45.812Z"
         assert pong_event["payload"]["received_at"] is not None
+
+
+def test_ws_malformed_messages_return_errors_without_dropping_the_socket(client):
+    """Bad frames get an INVALID_PAYLOAD error and the connection stays usable."""
+    host_token = _register_and_get_access_token(client, "ws_malformed_host")
+    room_id = _create_private_room(client, host_token)
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={host_token}") as websocket:
+        _consume_bootstrap(websocket)
+
+        for bad_frame in ("not json", "[1, 2]", '{"event": "client.ping", "payload": 5}'):
+            websocket.send_text(bad_frame)
+            error_event = websocket.receive_json()
+            assert error_event["event"] == "error"
+            assert error_event["payload"]["code"] == "INVALID_PAYLOAD"
+
+        # Wrong field types inside a command payload are rejected the same way.
+        websocket.send_json(
+            {
+                "event": "game.submit_cards",
+                "correlation_id": 12,
+                "payload": {"round_id": 7, "white_card_ids": "abc"},
+            }
+        )
+        error_event = websocket.receive_json()
+        assert error_event["payload"]["code"] == "INVALID_PAYLOAD"
+
+        websocket.send_json({"event": "client.ping", "payload": {}})
+        assert websocket.receive_json()["event"] == "server.pong"
+
+
+def test_ws_round_start_delivers_private_hand_and_resync_snapshot(client, test_db):
+    """Players get their hand with card texts on round start and again via state sync."""
+    white_cards = _seed_cards(
+        test_db,
+        black_cards=[("Prompt _", 1)],
+        white_cards=[f"Hand filler {index}" for index in range(30)],
+    )
+
+    host_token = _register_and_get_access_token(client, "ws_hand_host")
+    guest_one_token = _register_and_get_access_token(client, "ws_hand_guest_1")
+    guest_two_token = _register_and_get_access_token(client, "ws_hand_guest_2")
+
+    room_id, room_code = _create_private_room_with_code(client, host_token)
+    _join_room(client, guest_one_token, room_code, "roompass")
+    _join_room(client, guest_two_token, room_code, "roompass")
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={host_token}") as host_socket:
+        _consume_bootstrap(host_socket)
+        host_socket.send_json({"event": "lobby.start_game", "payload": {}})
+
+        assert host_socket.receive_json()["event"] == "game.started"
+        round_started = host_socket.receive_json()
+        assert round_started["event"] == "round.started"
+
+        hand_event = host_socket.receive_json()
+        assert hand_event["event"] == "player.hand"
+        assert hand_event["payload"]["round_id"] == round_started["payload"]["round_id"]
+        hand = hand_event["payload"]["hand"]
+        assert len(hand) == 10
+        assert all(white_cards[card["id"]] == card["text"] for card in hand)
+
+        host_socket.send_json({"event": "room.state_sync.request", "payload": {}})
+        game = host_socket.receive_json()["payload"]["game"]
+        assert game["hand_cards"] == hand
+        assert game["has_submitted"] is False
+        assert game["submitted_player_ids"] == []
+        # The running round timer is exposed so a reconnecting client can show it.
+        assert game["phase_expires_at"] is not None
 
 
 def test_ws_lobby_start_game_requires_host_and_emits_round_start(client, test_db):
@@ -761,3 +830,33 @@ def test_ws_reconnect_timeout_task_emits_removed_timeout(monkeypatch):
     assert removed_event["room_id"] == str(room_id)
     assert removed_event["payload"]["player_id"] == str(player_id)
     assert removed_event["payload"]["reason"] == "reconnect_timeout"
+
+
+def test_ws_reaction_is_broadcast_and_rate_limited(client):
+    """Reactions reach everyone in the room; a second one within the cooldown is refused."""
+    ws_rooms_router._last_reaction_at.clear()
+    host_token = _register_and_get_access_token(client, "ws_react_host")
+    guest_token = _register_and_get_access_token(client, "ws_react_guest")
+    room_id, room_code = _create_private_room_with_code(client, host_token)
+    _join_room(client, guest_token, room_code, "roompass")
+
+    with client.websocket_connect(f"/ws/rooms/{room_id}?token={host_token}") as host_socket:
+        host_sync = _consume_bootstrap(host_socket)
+        host_player_id = _get_player_id(host_sync, "ws_react_host")
+        with client.websocket_connect(f"/ws/rooms/{room_id}?token={guest_token}") as guest_socket:
+            _consume_bootstrap(guest_socket)
+            assert host_socket.receive_json()["event"] == "room.player_joined"
+
+            host_socket.send_json({"event": "room.reaction", "payload": {"reaction_id": "oh_come_on"}})
+            for sock in (host_socket, guest_socket):
+                event = _receive_next_matching_event(sock, "room.reaction", {"room.player_joined"})
+                assert event["payload"] == {"player_id": host_player_id, "reaction_id": "oh_come_on"}
+
+            host_socket.send_json({"event": "room.reaction", "payload": {"reaction_id": "gg"}})
+            limited = host_socket.receive_json()
+            assert limited["event"] == "error"
+            assert limited["payload"]["code"] == "RATE_LIMITED"
+
+            host_socket.send_json({"event": "room.reaction", "payload": {"reaction_id": "free text!"}})
+            invalid = host_socket.receive_json()
+            assert invalid["payload"]["code"] == "INVALID_PAYLOAD"
