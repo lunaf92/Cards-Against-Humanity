@@ -9,10 +9,14 @@ import redis.asyncio as redis
 from app.core.config import settings
 from app.core.database import async_session
 from app.schemas.ws import WSEvent
+from app.services.auth import AuthService
 from app.services.rooms import RoomService
 from app.services.ws_connection_manager import ROOM_CHANNEL_PREFIX
 
 logger = logging.getLogger(__name__)
+
+# Expired token revocations are purged from this loop so the table stays bounded.
+REVOCATION_CLEANUP_INTERVAL_SECONDS = 3600.0
 
 
 async def _publish_matchmaking_change(redis_client, change: dict) -> None:
@@ -42,8 +46,19 @@ async def _publish_matchmaking_change(redis_client, change: dict) -> None:
 async def run_matchmaking_worker(poll_interval_seconds: float = 1.0) -> None:
     """Continuously process matchmaking countdown state transitions."""
     redis_client = redis.from_url(settings.REDIS_URL)
+    loop = asyncio.get_running_loop()
+    next_revocation_cleanup_at = loop.time()
     try:
         while True:
+            if loop.time() >= next_revocation_cleanup_at:
+                next_revocation_cleanup_at = loop.time() + REVOCATION_CLEANUP_INTERVAL_SECONDS
+                try:
+                    async with async_session() as db:
+                        await AuthService.cleanup_expired_revocations(db)
+                        await db.commit()
+                except Exception as exc:  # pragma: no cover - defensive worker guard
+                    logger.exception("revocation cleanup failed: %s", exc)
+
             try:
                 async with async_session() as db:
                     updated = await RoomService.process_matchmaking_tick(db)
