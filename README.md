@@ -1,14 +1,17 @@
 # Cards Against Humanity Clone
 
-Cross-platform multiplayer card game backend built with FastAPI, PostgreSQL, and Redis.
+A self-hosted, mobile-first party card game you play with friends in the browser.
+FastAPI + PostgreSQL + Redis on the backend, React + Vite in `frontend/`.
 
-The backend is complete: auth, cards, rooms, random matchmaking, and the
-real-time WebSocket game engine. A mobile-first web frontend (React + Vite) lives in `frontend/` — see
-[docs/development-roadmap.md](docs/development-roadmap.md) for the roadmap.
+Create a private room, share the code, pick which decks to play with, and go:
+tap a card to see it big, play it, and let the judge pick the funniest answer.
+See [docs/development-roadmap.md](docs/development-roadmap.md) for what's next.
 
 ## Tech Stack
 
 - **Backend**: FastAPI (Python 3.13)
+- **Frontend**: React 19 + Vite + TypeScript, Zustand, plain CSS
+- **Web server (production)**: Caddy with automatic HTTPS
 - **Database**: PostgreSQL (async via SQLAlchemy, Alembic migrations)
 - **Cache/Game State**: Redis (decks, hands, matchmaking queue, pub/sub)
 - **Containerization**: Docker + Docker Compose
@@ -26,8 +29,9 @@ app/
 ├── workers/           # Matchmaking countdown worker
 └── main.py            # FastAPI app entrypoint
 
+frontend/              # Web app (pages, game views, socket client, sounds)
 alembic/               # Database migrations
-scripts/               # Database seeding
+scripts/               # Card pack seeder + bundled packs (scripts/card_packs)
 tests/                 # Test suite (endpoints, services, websocket)
 docs/                  # Plans, protocol specs, developer guide
 .envs/                 # Environment configuration files
@@ -35,12 +39,32 @@ docs/                  # Plans, protocol specs, developer guide
 
 ## Features
 
-- JWT auth (access + refresh with type claims, server-side revocation on logout)
-- Default and custom cards (custom card pools are not yet used in games)
-- Private rooms with 6-char code + password, host-only config
-- Random matchmaking queue with fill countdown (background worker)
-- Real-time gameplay over WebSockets: rounds, submissions, judging, scoring,
-  round/judging timers with auto-submit and auto-pick, reconnect windows
+**Playing**
+- Private rooms with a 6-character code + password; the host sets points to win,
+  round timer, max players and decks, and can change them in the lobby
+- Random matchmaking with strangers (lobby fill countdown)
+- Real-time rounds over WebSockets: play, judge, score, round/judging timers with
+  auto-submit and auto-pick, and a reconnect window if your phone drops
+- Mobile-first table: tap any card to zoom it, swipe through your hand,
+  judge sees all answers side by side; the judge's hand is greyed out
+- Quick reactions (6 emoji + 6 short phrases) that pop over the player, with a
+  2-second cooldown
+- Sound effects and haptics, with a mute toggle (original synthesized sounds in
+  `frontend/public/sounds`; swap any `.wav` for one with the same name)
+
+**Decks**
+- 10 built-in English packs (Family Edition is seeded only on request)
+- Pick one deck or any combination per room; default is every built-in pack but
+  Family Edition. The game won't start if the decks can't fill every hand
+- **My decks**: build your own decks with black and white cards (`___` marks a
+  blank, and "Pick N" follows the number of blanks)
+- **Share this deck**: one link; anyone who opens it can add and edit cards
+- **Public / Private** tick box (owner only). After a game, players can copy any
+  public deck it used into their own decks and add cards to it
+- Any deck you can see can be copied with "Make a copy"
+
+**Under the hood**
+- JWT auth (access + refresh, server-side revocation on logout)
 - WebSocket protocol reference: [docs/websocket-protocol.md](docs/websocket-protocol.md)
   and [docs/guide/14-realtime-protocol-quick-reference.md](docs/guide/14-realtime-protocol-quick-reference.md)
 
@@ -62,7 +86,8 @@ docker compose up --build
 ```
 
 This starts:
-- `backend` on `http://localhost:8000` (runs migrations on startup)
+- `migrate` (applies database migrations, then exits)
+- `backend` on `http://localhost:8000`
 - `worker` (matchmaking countdown)
 - `postgres` on `localhost:5432`
 - `redis` on `localhost:6379`
@@ -74,9 +99,9 @@ Open browser to `http://localhost:8000/docs` for interactive Swagger UI.
 ### Quick Verification
 
 ```bash
-# 1. Seed the default card deck
+# 1. Seed the built-in decks
 docker compose run --rm backend python -m scripts.seed_cards
-# safe to rerun; --list shows the packs, --packs a,b picks them
+# safe to rerun; --list shows the packs, --packs a,b picks them, --packs all adds Family Edition
 
 # 2. Run tests
 docker compose run --rm backend pytest tests/ -v
@@ -114,6 +139,12 @@ Notes:
 - WebSocket tests need the `redis` service running (compose handles this).
 - Coverage uses the fast `sys.monitoring` tracer via `COVERAGE_CORE=sysmon`
   (set in docker-compose); without it the suite is ~10x slower.
+
+#### Updating an existing install
+```bash
+docker compose up -d --build     # the migrate service applies new migrations
+docker compose run --rm backend python -m scripts.seed_cards   # tags cards with their deck (after migration 006)
+```
 
 #### Migrations
 ```bash
@@ -175,3 +206,12 @@ The app calls same-origin `/api` and `/ws`; Vite proxies them to the backend in 
 ## Self-hosting
 
 Production stack with Caddy (automatic HTTPS): see [docs/deployment.md](docs/deployment.md).
+
+## Card content and licence
+
+The built-in packs in `scripts/card_packs` are a snapshot of
+[BixelPitch/cah-cards](https://github.com/BixelPitch/cah-cards), which is based on
+Cards Against Humanity® and released under
+[CC BY-NC-SA 2.0](https://creativecommons.org/licenses/by-nc-sa/2.0/). See
+`scripts/card_packs/CREDITS.md`. This is a non-commercial fan project and isn't
+affiliated with Cards Against Humanity LLC.
