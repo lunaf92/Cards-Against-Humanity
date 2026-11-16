@@ -1,4 +1,5 @@
 """Main FastAPI application."""
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,11 +8,21 @@ from app.core.config import settings
 from app.routers import auth, cards, health, rooms, users, ws_rooms
 from app.services.ws_connection_manager import connection_manager
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Start and stop shared websocket pub/sub bridge with app lifecycle."""
     await connection_manager.start_pubsub_bridge(settings.REDIS_URL)
+    # Round/judging timers are in-process tasks; re-arm them for games that were
+    # mid-round when the previous process stopped. Never block startup on this.
+    try:
+        restored = await ws_rooms.restore_game_timers()
+        if restored:
+            logger.info("re-armed %s game timer(s) after restart", restored)
+    except Exception:
+        logger.exception("failed to restore game timers on startup")
     try:
         yield
     finally:
