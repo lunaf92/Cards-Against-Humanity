@@ -152,4 +152,14 @@ async def update_room_config(
     )
     await db.commit()
     await db.refresh(room)
-    return await _build_room_details(db, room)
+    details = await _build_room_details(db, room)
+    # Non-host clients only learn about setting changes through the room socket.
+    await connection_manager.broadcast_event(
+        room.id,
+        WSEvent(
+            event="room.config_updated",
+            room_id=room.id,
+            payload={"room": RoomResponse.model_validate(room).model_dump(mode="json")},
+        ).model_dump(mode="json"),
+    )
+    return details

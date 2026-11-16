@@ -250,6 +250,15 @@ Payload:
 }
 ```
 
+#### room.config_updated
+Sent after the host changes settings with `PATCH /rooms/{room_id}/config`.
+`room` has the same shape as `room.state_sync`'s `room`.
+
+Payload:
+```json
+{ "room": { "id": "7fcbf5f4-...", "max_players": 8, "winning_score": 5, "round_timer_seconds": 60, "...": "..." } }
+```
+
 ### Matchmaking Lifecycle
 
 Players queued with `POST /rooms/queue` have no room socket yet, so only the

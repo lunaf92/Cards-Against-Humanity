@@ -368,3 +368,23 @@ def test_active_room_ignores_finished_rooms(client, test_db):
 
     asyncio.run(_finish())
     assert client.get("/rooms/active", headers=_auth_headers(token)).json() == {"room": None}
+
+
+def test_config_update_is_broadcast_to_room(client, monkeypatch):
+    """Host config changes reach other players as room.config_updated."""
+    events: list[tuple[UUID, dict]] = []
+
+    async def _capture(room_id: UUID, payload: dict) -> None:
+        events.append((room_id, payload))
+
+    monkeypatch.setattr(rooms_router.connection_manager, "broadcast_event", _capture)
+    token = _register_and_get_access_token(client, "cfg_broadcaster")
+    room_id = client.post("/rooms", json={"password": "pass1234"}, headers=_auth_headers(token)).json()["id"]
+
+    response = client.patch(
+        f"/rooms/{room_id}/config", json={"winning_score": 5}, headers=_auth_headers(token)
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert len(events) == 1
+    assert events[0][1]["event"] == "room.config_updated"
+    assert events[0][1]["payload"]["room"]["winning_score"] == 5
