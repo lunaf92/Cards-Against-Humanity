@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,12 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.models import Card, Deck
 # Family Edition is the kid-friendly set; mixed into the adult packs it dilutes them.
-from app.services.decks import EXCLUDED_BY_DEFAULT
+from app.services.decks import EXCLUDED_BY_DEFAULT, pick_for  # noqa: F401 (pick_for re-exported)
 
 PACKS_DIR = Path(__file__).parent / "card_packs"
 DEFAULT_LANGUAGE = "en"
-BLANK = re.compile(r"_{2,}")
-MAX_PICK = 3
 
 
 @dataclass(frozen=True)
@@ -42,11 +39,6 @@ class SeedCard:
     pick: int
     language: str
     pack: str
-
-
-def pick_for(text: str) -> int:
-    """Number of white cards a prompt takes: one per ___ blank, 1 for plain questions."""
-    return max(1, min(MAX_PICK, len(BLANK.findall(text))))
 
 
 def available_packs(language: str = DEFAULT_LANGUAGE) -> dict[str, Path]:

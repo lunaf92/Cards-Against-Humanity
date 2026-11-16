@@ -65,6 +65,9 @@ export default function HomePage() {
           <button className="btn ghost big" onClick={() => setPanel('queue')}>
             Play with strangers
           </button>
+          <button className="btn ghost big" onClick={() => navigate('/decks')}>
+            My decks
+          </button>
         </div>
       )}
       {panel === 'create' && <CreateRoom onBack={() => setPanel('menu')} onDone={goTo} onError={setError} />}

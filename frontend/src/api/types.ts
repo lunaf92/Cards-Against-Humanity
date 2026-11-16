@@ -123,3 +123,20 @@ export interface WSErrorPayload {
   message: string
   details?: Record<string, unknown>
 }
+
+export interface DeckCard {
+  id: string
+  type: 'black' | 'white'
+  text: string
+  pick: number
+}
+
+export interface DeckDetail extends RoomDeck {
+  is_owner: boolean
+  can_edit: boolean
+  owner_name: string | null
+  share_code: string | null
+  copied_from_name: string | null
+  members: { user_id: string; username: string }[]
+  cards: DeckCard[]
+}

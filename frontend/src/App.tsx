@@ -4,6 +4,9 @@ import { useAuthStore } from './stores/authStore'
 import AuthPage from './pages/AuthPage'
 import HomePage from './pages/HomePage'
 import RoomPage from './pages/RoomPage'
+import DecksPage from './pages/DecksPage'
+import DeckPage from './pages/DeckPage'
+import JoinDeckPage from './pages/JoinDeckPage'
 
 export default function App() {
   const status = useAuthStore((s) => s.status)
@@ -23,6 +26,9 @@ export default function App() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/room/:roomId" element={<RoomPage />} />
+      <Route path="/decks" element={<DecksPage />} />
+      <Route path="/decks/join/:code" element={<JoinDeckPage />} />
+      <Route path="/decks/:deckId" element={<DeckPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

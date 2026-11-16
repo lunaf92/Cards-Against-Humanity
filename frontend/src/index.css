@@ -1044,3 +1044,42 @@ h2 {
 .deck-name { display: flex; flex-direction: column; }
 .deck-counts { font-size: 0.8rem; }
 .deck-group:disabled .deck-row { cursor: default; }
+
+/* My decks */
+.topbar-spacer { width: 72px; }
+.deck-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.deck-tile { display: flex; flex-direction: column; gap: 4px; color: inherit; text-decoration: none; }
+.deck-tile-name { font-weight: 700; font-size: 1.05rem; }
+.deck-tile .badges { display: flex; gap: 6px; margin-top: 4px; }
+.deck-title-input {
+  font: inherit; font-size: 1.3rem; font-weight: 800; color: var(--text);
+  background: transparent; border: 0; border-bottom: 1px dashed var(--line); padding: 4px 0; width: 100%;
+}
+.deck-title-input:focus { outline: none; border-bottom: 2px solid var(--accent); }
+.tick { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
+.tick input { width: 22px; height: 22px; margin-top: 2px; flex: none; accent-color: var(--accent); }
+.tick > span { display: flex; flex-direction: column; font-weight: 600; }
+.tick .hint { font-weight: 400; }
+.share-box { display: flex; gap: 8px; align-items: center; }
+.members ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.member { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+.btn.danger { background: var(--danger); color: #fff; }
+.tabs { display: flex; gap: 4px; background: var(--bg-2); border-radius: 12px; padding: 4px; }
+.tab {
+  flex: 1; appearance: none; border: 0; border-radius: 9px; padding: 10px; min-height: 40px;
+  font: inherit; font-weight: 700; color: var(--muted); background: transparent; cursor: pointer;
+}
+.tab.on { background: var(--panel); color: var(--text); }
+.add-card { display: flex; gap: 8px; align-items: stretch; }
+.add-card textarea, .edit-text {
+  flex: 1; font: inherit; font-size: 16px; resize: vertical; min-height: 52px;
+  border-radius: 12px; border: 1px solid var(--line); padding: 10px 12px; color: var(--text); background: var(--bg);
+}
+.add-card.black textarea { background: #000; color: #fff; }
+.add-card.white textarea { background: var(--card-white); color: #111; }
+.add-card textarea:focus, .edit-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.deck-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.deck-grid .card.mini { width: 100%; }
+.deck-page .sheet-body .card { align-self: center; }
+.deck-tile .badges { margin-left: 0; justify-content: flex-start; }
+.deck-page .sheet-body .card.medium { width: min(46vw, 180px); }
