@@ -3,7 +3,7 @@
 Cross-platform multiplayer card game backend built with FastAPI, PostgreSQL, and Redis.
 
 The backend is complete: auth, cards, rooms, random matchmaking, and the
-real-time WebSocket game engine. Next up is the frontend (Expo / React Native) — see
+real-time WebSocket game engine. A mobile-first web frontend (React + Vite) lives in `frontend/` — see
 [docs/development-roadmap.md](docs/development-roadmap.md) for the roadmap.
 
 ## Tech Stack
@@ -157,7 +157,16 @@ Key variables:
 - [docs/guide/](docs/guide/README.md) — full developer guide (architecture, protocol, onboarding)
 - [docs/product-requirements.md](docs/product-requirements.md) — functional requirements
 
-## Next: Frontend (Phase 4+)
+## Frontend
 
-Expo / React Native app consuming this API. Start with auth + API client
-(implementation-plan.md Phase 4), then lobby/matchmaking (Phase 5), then gameplay (Phase 6).
+Mobile-first web app in `frontend/` (React + Vite + TypeScript, Zustand).
+
+```bash
+docker compose up -d          # backend, worker, Postgres, Redis
+cd frontend
+npm install
+npm run dev                   # http://localhost:5173, also reachable on your LAN
+npm test                      # unit tests
+```
+
+The app calls same-origin `/api` and `/ws`; Vite proxies them to the backend in dev.
