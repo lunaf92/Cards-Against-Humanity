@@ -20,6 +20,9 @@ RUN poetry config virtualenvs.create false && \
 # Copy app
 COPY app ./app
 COPY scripts ./scripts
+# Migrations ship in the image so the production stack can run them without a source mount.
+COPY alembic ./alembic
+COPY alembic.ini ./
 
 # Expose port
 EXPOSE 8000

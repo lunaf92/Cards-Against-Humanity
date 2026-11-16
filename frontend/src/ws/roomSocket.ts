@@ -16,6 +16,16 @@ const FATAL_CODES: Record<number, string> = {
   4404: 'This room no longer exists.',
 }
 const PING_INTERVAL_MS = 25_000
+
+// crypto.randomUUID only exists in secure contexts; plain-HTTP LAN hosting needs a fallback.
+function newId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
 const MAX_BACKOFF_MS = 10_000
 
 export function wsBaseUrl(): string {
@@ -57,7 +67,7 @@ export class RoomSocket {
 
   send(event: string, payload: Record<string, unknown> = {}): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false
-    const message_id = crypto.randomUUID()
+    const message_id = newId()
     this.ws.send(
       JSON.stringify({
         version: 'v1',

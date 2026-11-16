@@ -170,3 +170,7 @@ npm test                      # unit tests
 ```
 
 The app calls same-origin `/api` and `/ws`; Vite proxies them to the backend in dev.
+
+## Self-hosting
+
+Production stack with Caddy (automatic HTTPS): see [docs/deployment.md](docs/deployment.md).
