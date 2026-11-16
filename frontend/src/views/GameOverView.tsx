@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { decksApi } from '../api/endpoints'
 import type { RoomDeck } from '../api/types'
@@ -33,8 +33,21 @@ export default function GameOverView({ meId }: { meId: string }) {
 }
 
 // Public decks people made that this game used: anyone can take a copy home and add to it.
-function CopyDecks({ decks }: { decks: RoomDeck[] }) {
+function CopyDecks({ decks: candidates }: { decks: RoomDeck[] }) {
   const [copies, setCopies] = useState<Record<string, string | 'busy' | 'error'>>({})
+  // Decks you already own or co-edit need no copy; wait for that list before offering any.
+  const [mine, setMine] = useState<Set<string> | null>(null)
+  useEffect(() => {
+    let live = true
+    decksApi
+      .usable()
+      .then((list) => live && setMine(new Set(list.filter((d) => !d.is_builtin).map((d) => d.id))))
+      .catch(() => live && setMine(new Set()))
+    return () => {
+      live = false
+    }
+  }, [])
+  const decks = mine ? candidates.filter((d) => !mine.has(d.id) || d.id in copies) : []
   if (decks.length === 0) return null
   async function copy(id: string) {
     setCopies((c) => ({ ...c, [id]: 'busy' }))
