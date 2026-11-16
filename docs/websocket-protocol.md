@@ -252,6 +252,12 @@ Payload:
 
 ### Matchmaking Lifecycle
 
+Players queued with `POST /rooms/queue` have no room socket yet, so only the
+player whose request completed the match learns the room id from the response.
+Everyone else polls `GET /rooms/active` (every 2-3 s) until it returns a room,
+then connects to that room's socket. The same endpoint lets a client resume its
+unfinished room after a page reload.
+
 #### matchmaking.match_found
 Emitted to matched players once they are assigned to a random room.
 

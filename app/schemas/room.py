@@ -90,3 +90,9 @@ class QueueLeaveResponse(BaseModel):
     """Leave queue response payload."""
 
     removed: bool
+
+
+class ActiveRoomResponse(BaseModel):
+    """The caller's current unfinished room, or null when they are in none."""
+
+    room: RoomDetailsResponse | None

@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.models import User
 from app.schemas.room import (
+    ActiveRoomResponse,
     QueueLeaveResponse,
     QueueResponse,
     RoomConfigUpdateRequest,
@@ -110,6 +111,18 @@ async def leave_matchmaking_queue(current_user: User = Depends(get_current_user)
         return QueueLeaveResponse(removed=removed)
     finally:
         await redis_client.close()
+
+
+@router.get("/active", response_model=ActiveRoomResponse)
+async def get_active_room(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the caller's newest unfinished room so clients can resume or detect a match."""
+    room = await RoomService.get_active_room_for_user(db, current_user.id)
+    if room is None:
+        return ActiveRoomResponse(room=None)
+    return ActiveRoomResponse(room=await _build_room_details(db, room))
 
 
 @router.get("/{room_id}", response_model=RoomDetailsResponse)

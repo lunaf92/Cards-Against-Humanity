@@ -776,6 +776,18 @@ class RoomService:
         return room
 
     @staticmethod
+    async def get_active_room_for_user(db: AsyncSession, user_id: UUID) -> Room | None:
+        """Return the newest unfinished room the user belongs to (resume after reload/matchmaking)."""
+        result = await db.execute(
+            select(Room)
+            .join(RoomPlayer, RoomPlayer.room_id == Room.id)
+            .where(RoomPlayer.player_id == user_id, Room.status != "finished")
+            .order_by(Room.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def get_room_for_member(db: AsyncSession, room_id: UUID, user_id: UUID) -> Room:
         """Return room only if the requesting user is a member."""
         result = await db.execute(select(Room).where(Room.id == room_id))

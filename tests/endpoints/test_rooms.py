@@ -326,3 +326,45 @@ def test_matchmaking_worker_tick_starts_and_cancels_countdown(test_db):
             assert room.matchmaking_fill_expires_at is None
 
     asyncio.run(_assert_tick_behavior())
+
+
+def test_active_room_lets_queued_players_find_their_match(client, monkeypatch):
+    """Players queued before the match was made discover the room via GET /rooms/active."""
+    fake_redis = _FakeRedisClient()
+    monkeypatch.setattr(rooms_router.redis, "from_url", lambda *_args, **_kwargs: fake_redis)
+
+    async def _ignore_broadcast(room_id: UUID, payload: dict) -> None:
+        return None
+
+    monkeypatch.setattr(rooms_router.connection_manager, "broadcast_event", _ignore_broadcast)
+
+    tokens = [_register_and_get_access_token(client, f"active_user_{i}") for i in range(3)]
+
+    none_yet = client.get("/rooms/active", headers=_auth_headers(tokens[0]))
+    assert none_yet.status_code == status.HTTP_200_OK
+    assert none_yet.json() == {"room": None}
+
+    for token in tokens:
+        client.post("/rooms/queue", headers=_auth_headers(token))
+
+    active = client.get("/rooms/active", headers=_auth_headers(tokens[0]))
+    assert active.status_code == status.HTTP_200_OK
+    assert active.json()["room"]["room_kind"] == "random"
+    assert len(active.json()["room"]["players"]) == 3
+
+
+def test_active_room_ignores_finished_rooms(client, test_db):
+    """A finished room is not reported as active."""
+    token = _register_and_get_access_token(client, "active_finished")
+    created = client.post("/rooms", json={"password": "pass1234"}, headers=_auth_headers(token))
+    room_id = created.json()["id"]
+    assert client.get("/rooms/active", headers=_auth_headers(token)).json()["room"]["id"] == room_id
+
+    async def _finish() -> None:
+        async with test_db() as session:
+            room = (await session.execute(select(Room).where(Room.id == UUID(room_id)))).scalar_one()
+            room.status = "finished"
+            await session.commit()
+
+    asyncio.run(_finish())
+    assert client.get("/rooms/active", headers=_auth_headers(token)).json() == {"room": None}
